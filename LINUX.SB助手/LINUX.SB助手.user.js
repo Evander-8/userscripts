@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      3.3.8
+// @version      1.0.0
 // @description  积分分析（今天/昨天/近七天筛选）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 幸运打赏今日统计（概率估算·回帖解锁·玩家列表·收支），TAB 切换；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
@@ -36,7 +36,7 @@
     var MARKET_KEY = 'linuxsb-market-v309';   // 称号监控配置 + 状态（localStorage 持久化）
     var TAB_KEY = 'linuxsb-combo-tab-v309';   // 记住当前激活的 TAB（刷新后保持，不切回默认）
     var RANGE_KEY = 'linuxsb-combo-range-v310'; // 记住积分分析的筛选范围（今天/昨天/近七天）
-    var SYN_KEY = 'linuxsb-syn-v332';           // 称号合成解析结果缓存
+    var SYN_KEY = 'linuxsb-syn-v333';           // 称号合成解析结果缓存
     var SYN_RANGE_KEY = 'linuxsb-syn-range-v320'; // 称号合成的筛选范围
 
     // 筛选范围：value -> 展示名 + 抓取下界（往前 N 天，含当天）
