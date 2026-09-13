@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.1.0
+// @version      1.1.1
 // @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 幸运打赏今日统计（概率估算·回帖解锁·玩家列表·收支），TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
@@ -332,7 +332,8 @@
     /* ================= 采集 ================= */
 
     // 逐页抓取记录，页与页间隔 1 秒；floor 为 null 时抓到最后一页（「所有」）
-    function collectAll(uid, floor, onProgress) {
+    // probe 传入上一轮的完整记录时启用增量探测：第 1 页与缓存一致就直接复用，不再往后翻页
+    function collectAll(uid, floor, onProgress, probe) {
         return new Promise(function (resolve, reject) {
             (async function () {
                 var records = [];
@@ -351,6 +352,11 @@
                     pages = p;
                     if (p === 1) totalPages = maxPageFromHtml(html, 'points_rewards');
                     if (onProgress) onProgress(p, totalPages);
+                    // 增量探测命中：最新一页没有任何变化，后面的页不必再抓
+                    if (p === 1 && probe && sameHead(items, probe)) {
+                        resolve({ records: probe, pages: 1, truncated: false, unchanged: true });
+                        return;
+                    }
                     var anyKept = false;
                     for (var i = 0; i < items.length; i++) {
                         var t = new Date(items[i].time).getTime();
@@ -372,6 +378,18 @@
     // 按当前筛选范围过滤已抓取的记录
     function filterRecords(records, range) {
         return records.filter(function (r) { return inRange(r.time, range); });
+    }
+
+    // 第 1 页与缓存里最新的同量记录逐条比对；完全一致即认为没有新记录
+    // （列表按时间倒序，有新记录只会出现在最前面）
+    function sameHead(pageItems, cached) {
+        if (!pageItems || !pageItems.length || !cached || !cached.length) return false;
+        if (pageItems.length > cached.length) return false;   // 首页比缓存还长 → 缓存不完整
+        for (var i = 0; i < pageItems.length; i++) {
+            var a = pageItems[i], b = cached[i];
+            if (!b || a.reason !== b.reason || a.time !== b.time || a.delta !== b.delta) return false;
+        }
+        return true;
     }
 
     // 解析一页回帖列表，返回当页所有回帖的 Unix 秒时间戳
@@ -2041,6 +2059,10 @@
         }
         // floor 由当前筛选范围决定：普通范围只抓近七天，选「所有」时抓到底
         var floor = floorForRange(currentRange);
+        // 增量探测：自动刷新且缓存已覆盖当前范围时，先只抓第 1 页和缓存比对；
+        // 没新记录就整轮复用（1 个请求搞定）。手动点「刷新」永远走全量。
+        var probe = (!manual && lastRecords && lastRecords.length && floorCovers(lastFloor, floor))
+            ? lastRecords : null;
         var pdaBar = progressEl('[data-pda-progress]');
         var ldmBar = progressEl('[data-ldm-progress]');
         progressStart(pdaBar);
@@ -2049,7 +2071,7 @@
         Promise.all([collectAll(uid, floor, function (page, total) {
             progressPage(pdaBar, page, total);
             progressPage(ldmBar, page, total);
-        }), collectReplies(uid)]).then(function (results) {
+        }, probe), collectReplies(uid)]).then(function (results) {
             var repliesToday = results[1];
             lastRecords = results[0].records;
             lastUid = uid;
