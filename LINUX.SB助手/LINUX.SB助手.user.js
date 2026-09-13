@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.0.0
-// @description  积分分析（今天/昨天/近七天筛选）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 幸运打赏今日统计（概率估算·回帖解锁·玩家列表·收支），TAB 切换；未监测到用户时三指标显 "-" 且底部提示
+// @version      1.1.0
+// @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 幸运打赏今日统计（概率估算·回帖解锁·玩家列表·收支），TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
 // @match        https://linux.sb/*
@@ -39,11 +39,12 @@
     var SYN_KEY = 'linuxsb-syn-v333';           // 称号合成解析结果缓存
     var SYN_RANGE_KEY = 'linuxsb-syn-range-v320'; // 称号合成的筛选范围
 
-    // 筛选范围：value -> 展示名 + 抓取下界（往前 N 天，含当天）
+    // 筛选范围：value -> 展示名 + 抓取下界（往前 N 天，含当天）；days 为 null 表示不限（抓全部）
     var RANGES = {
         today: { label: '今日', days: 0 },
         yesterday: { label: '昨日', days: 1 },
         week: { label: '近七天', days: 6 },
+        all: { label: '所有', days: null },
     };
 
     // 我打赏别人：捕获玩家名
@@ -68,14 +69,17 @@
 
     var widget = null;
     var lastRecords = null;      // 最近一次抓取到的记录（跨多个自然日，供筛选切换时本地重算）
+    var lastFloor = null;        // lastRecords 的抓取下界（null＝全量）
     var lastTimeText = '';       // 最近一次抓取完成时间（切换筛选时沿用）
     var lastUid = null;          // 最近一次抓取的 uid（切换筛选时按需重抓）
     var currentRange = 'today';  // 当前积分分析筛选范围
+    var refreshing = false;      // 积分抓取进行中（防止切换范围时并发重抓）
 
     // 称号合成统计状态
     var syn = {
         items: null,        // 已解析的通知项 [{time, timeText, consumed:[{rarity,count}], result}]
         range: 'today',     // 当前筛选范围
+        floor: null,        // items 的抓取下界（null＝全量）
         timeText: '',       // 抓取完成时间
         loading: false,
         loadedUid: null,    // 已抓取的 uid（同一会话内不重复抓）
@@ -158,10 +162,11 @@
         return new Date(now.getFullYear(), now.getMonth(), now.getDate() - (offset || 0));
     }
 
-    // 某时间是否落在筛选范围内（today / yesterday / week）
+    // 某时间是否落在筛选范围内（today / yesterday / week / all）
     function inRange(iso, range) {
         var t = new Date(iso).getTime();
         if (isNaN(t)) return false;
+        if (range === 'all') return true;                 // 所有：不设下界
         var r = RANGES[range] || RANGES.today;
         var lower = dayStart(r.days).getTime();
         if (range === 'yesterday') {
@@ -170,13 +175,26 @@
         return t >= lower;
     }
 
-    // 抓取下界：最宽范围（近七天）的起点，一次抓取即可覆盖全部筛选项
+    // 抓取下界：最宽范围（近七天）的起点，一次抓取即可覆盖全部按天筛选项
     function fetchFloor() {
         var maxDays = 0;
         Object.keys(RANGES).forEach(function (k) {
-            if (RANGES[k].days > maxDays) maxDays = RANGES[k].days;
+            var d = RANGES[k].days;
+            if (typeof d === 'number' && d > maxDays) maxDays = d;
         });
         return dayStart(maxDays).getTime();
+    }
+
+    // 某筛选范围需要的抓取下界；null 表示不设下界（「所有」＝一直抓到最后一页）
+    function floorForRange(range) {
+        return range === 'all' ? null : fetchFloor();
+    }
+
+    // 手上的数据（heldFloor）是否已覆盖目标范围（needFloor）；null 代表无下界（全量）
+    function floorCovers(heldFloor, needFloor) {
+        if (heldFloor == null) return true;    // 已抓全量，任何范围都覆盖
+        if (needFloor == null) return false;   // 需要全量，但手上只有按天抓的部分数据
+        return heldFloor <= needFloor;
     }
 
     function parseItems(html) {
@@ -241,6 +259,66 @@
         t.__tm = setTimeout(function () { t.classList.remove('on'); }, 2600);
     }
 
+    /* ---------- 抓取进度条 ---------- */
+
+    function progressEl(sel) {
+        return widget ? widget.querySelector(sel) : null;
+    }
+
+    // 开始：不确定进度动画 + 「抓取中…」
+    function progressStart(el) {
+        if (!el) return;
+        clearTimeout(el.__pt);
+        el.hidden = false;
+        el.classList.remove('combo-progress-ok', 'combo-progress-err');
+        el.classList.add('indet');
+        el.querySelector('.combo-progress-bar').style.width = '';
+        el.querySelector('.combo-progress-text').textContent = '抓取中…';
+    }
+
+    // 每翻一页更新一次；知道总页数时显示真实百分比，否则用不确定动画
+    function progressPage(el, page, total) {
+        if (!el) return;
+        el.hidden = false;
+        el.classList.remove('combo-progress-ok', 'combo-progress-err');
+        var bar = el.querySelector('.combo-progress-bar');
+        var txt = el.querySelector('.combo-progress-text');
+        if (total > 1) {
+            el.classList.remove('indet');
+            bar.style.width = Math.round(Math.min(1, page / total) * 100) + '%';
+            txt.textContent = '抓取中 ' + page + '/' + total + ' 页';
+        } else {
+            el.classList.add('indet');
+            txt.textContent = '抓取中 第 ' + page + ' 页';
+        }
+    }
+
+    // 结束：短暂显示 ✓ 已更新 / ✗ 失败，然后隐藏
+    function progressDone(el, ok) {
+        if (!el) return;
+        clearTimeout(el.__pt);
+        el.hidden = false;
+        el.classList.remove('indet');
+        el.classList.add(ok ? 'combo-progress-ok' : 'combo-progress-err');
+        el.querySelector('.combo-progress-bar').style.width = '100%';
+        el.querySelector('.combo-progress-text').textContent = ok ? '✓ 已更新' : '✗ 抓取失败';
+        el.__pt = setTimeout(function () {
+            el.hidden = true;
+            el.classList.remove('combo-progress-ok', 'combo-progress-err');
+        }, ok ? 1800 : 4000);
+    }
+
+    // 从分页链接取总页数（用于进度百分比）；取不到返回 0 → 用不确定进度
+    function maxPageFromHtml(html, tab) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var max = 0;
+        doc.querySelectorAll('a[href*="tab=' + tab + '"][href*="p="]').forEach(function (a) {
+            var m = (a.getAttribute('href') || '').match(/[?&]p=(\d+)/);
+            if (m) { var n = parseInt(m[1], 10); if (n > max) max = n; }
+        });
+        return max;
+    }
+
     function toNum(x) {
         var v = parseInt(String(x).replace(/[^\d-]/g, ''), 10);
         return isNaN(v) ? 0 : v;
@@ -253,13 +331,12 @@
 
     /* ================= 采集 ================= */
 
-    // 逐页抓取记录，页与页间隔 1 秒；抓到「近七天」下界即停止（一次抓取覆盖全部筛选项）
-    function collectAll(uid) {
+    // 逐页抓取记录，页与页间隔 1 秒；floor 为 null 时抓到最后一页（「所有」）
+    function collectAll(uid, floor, onProgress) {
         return new Promise(function (resolve, reject) {
             (async function () {
                 var records = [];
-                var floor = fetchFloor();
-                var pages = 0, truncated = false;
+                var pages = 0, truncated = false, totalPages = 0;
                 outer:
                 for (var p = 1; p <= CONFIG.maxPages; p++) {
                     var html;
@@ -272,10 +349,12 @@
                     var items = parseItems(html);
                     if (!items.length) break;
                     pages = p;
+                    if (p === 1) totalPages = maxPageFromHtml(html, 'points_rewards');
+                    if (onProgress) onProgress(p, totalPages);
                     var anyKept = false;
                     for (var i = 0; i < items.length; i++) {
                         var t = new Date(items[i].time).getTime();
-                        if (isNaN(t) || t < floor) {
+                        if (isNaN(t) || (floor != null && t < floor)) {
                             truncated = true;
                             break outer;
                         }
@@ -415,6 +494,14 @@
         return m ? parseTimeish(m[0]) : null;
     }
 
+    // 通知项自身的时间在 .post-meta 里（如「3天前」）；正文里引用的日期不算
+    function pickMetaTime(el) {
+        var meta = el.querySelector('.post-meta');
+        if (!meta) return null;
+        var txt = (meta.textContent || '').replace(/\s+/g, ' ').trim();
+        return txt ? parseTimeish(txt) : null;
+    }
+
     // 把一条合成通知切成「消耗段」「获得段」，例如：
     // 「你消耗了 96 个 R 称号，批量熔炼获得 32 个 SR：万人迷 ×7、论坛之星 ×13。」
     function synthSplit(text) {
@@ -536,12 +623,20 @@
         var synth = [];
         var anyTime = false;
         var skipped = 0;
+        var oldest = null;   // 本页最早的通知时间（用于判断是否已翻过「近七天」下界）
 
         nodes.forEach(function (box) {
             var text = (box.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!isSynthNotif(text)) { skipped++; return; }   // 回收/售出/打赏/提及/抽奖/赠送等一律不计
-            var t = pickItemTime(box);
+            // 时间探测要对「整页所有通知项」做，不能只对命中的合成项做：
+            // 合成通知常常不在第 1 页（第 1 页多是打赏/提及），若只按合成项采样，
+            // 第 1 页会误判为「通知里没有时间字段」而在第 1 页就中止翻页，
+            // 导致后面几页的熔炼/合成记录永远抓不到。
+            // 通知自身的时间在 .post-meta 里（如「3天前」），优先用它，
+            // 避免正文里引用的日期被误当成通知时间而让翻页提前终止。
+            var t = pickMetaTime(box) || pickItemTime(box);
             if (t) anyTime = true;
+            if (t && (!oldest || t < oldest)) oldest = t;
+            if (!isSynthNotif(text)) { skipped++; return; }   // 回收/售出/打赏/提及/抽奖/赠送等一律不计
             var split = synthSplit(text);
             var consumed = extractConsume(split.consume);
             var gain = parseGain(split.gain);
@@ -561,6 +656,7 @@
             nodeCount: nodes.length,
             skipped: skipped,
             anyTime: anyTime,
+            oldest: oldest ? oldest.toISOString() : '',
             sig: nodes.length + '#' + first.slice(0, 80),
         };
     }
@@ -639,14 +735,13 @@
         return res;
     }
 
-    // 逐页抓取通知列表，抓到「近七天」下界 / 无通知项 / 页码重复即停止
-    function collectSyn(uid) {
+    // 逐页抓取通知列表，抓到 floor 下界 / 无通知项 / 页码重复即停止；floor 为 null 时抓到最后一页（「所有」）
+    function collectSyn(uid, floor, onProgress) {
         return new Promise(function (resolve, reject) {
             (async function () {
-                var floor = fetchFloor();
                 var items = [], note = '';
                 var seenSig = {}, anyTime = false;
-                var pages = 0, filtered = 0;
+                var pages = 0, filtered = 0, totalPages = 0;
                 for (var p = 1; p <= CONFIG.maxPages; p++) {
                     var html;
                     try {
@@ -660,6 +755,8 @@
                     if (seenSig[parsed.sig]) break;             // 分页参数无效导致页码重复
                     seenSig[parsed.sig] = true;
                     pages = p;
+                    if (p === 1) totalPages = maxPageFromHtml(html, 'notifications');
+                    if (onProgress) onProgress(p, totalPages);
                     filtered += parsed.skipped || 0;
                     if (parsed.anyTime) anyTime = true;
                     if (p === 1 && !parsed.anyTime) {           // 通知不带任何可识别时间：无法按时间分档
@@ -669,13 +766,15 @@
                     }
                     var older = false;
                     parsed.items.forEach(function (it) {
-                        if (it.time && new Date(it.time).getTime() < floor) {
+                        if (floor != null && it.time && new Date(it.time).getTime() < floor) {
                             older = true;
                             return;
                         }
                         items.push(it);
                     });
                     if (older) break;
+                    // 本页最早的通知都已翻到 floor 下界之外，后面的页只会更早（列表按时间倒序）
+                    if (floor != null && parsed.oldest && new Date(parsed.oldest).getTime() < floor) break;
                     if (p < CONFIG.maxPages) await delay(CONFIG.pageDelayMs);
                 }
                 resolve({ items: items, pages: pages, note: note, anyTime: anyTime, filtered: filtered });
@@ -873,6 +972,14 @@
         else snap.insertAdjacentHTML('beforeend', html);
     }
 
+    // 移除某监听项的快照行（无达标挂单时）
+    function removeSnapshotRow(keyword) {
+        var snap = widget.querySelector('[data-market-snap]');
+        if (!snap) return;
+        var old = snap.querySelector('[data-market-kw="' + keyword + '"]');
+        if (old) old.remove();
+    }
+
     // 显示醒目提示横幅（价格达标）
     function showMarketAlert(items, sticky) {
         var banner = widget.querySelector('[data-market-alert]');
@@ -969,6 +1076,14 @@
             market.config.titles.forEach(function (w) {
                 var best = hits[w.keyword];
                 market.listed[w.keyword] = best ? [best] : [];
+
+                // 快照：达标挂单写入 / 更新（无挂单时由下面的分支移除）
+                if (best) {
+                    upsertSnapshotRow({
+                        keyword: w.keyword, title: best.title, price: best.price,
+                        stock: best.stock, timeLeft: best.timeLeft,
+                    });
+                }
 
                 if (!best) {
                     // 无挂单（下架/被买走）→ 关闭该称号的所有提醒，且清除「已忽略」标记，允许以后重新提醒
@@ -1172,10 +1287,12 @@
             '  <div class="market-toast" data-market-toast></div>' +
             /* ---- 积分分析面板 ---- */
             '  <div class="combo-pane" data-pane="points">' +
+            '    <div class="combo-progress" data-pda-progress hidden><span class="combo-progress-track"><span class="combo-progress-bar"></span></span><span class="combo-progress-text"></span></div>' +
             '    <div class="pda-filter" data-pda-filter>' +
             '      <button type="button" class="pda-filter-btn" data-range="today">今天</button>' +
             '      <button type="button" class="pda-filter-btn" data-range="yesterday">昨天</button>' +
             '      <button type="button" class="pda-filter-btn" data-range="week">近七天</button>' +
+            '      <button type="button" class="pda-filter-btn" data-range="all">所有</button>' +
             '    </div>' +
             '    <div class="pda-concl" data-pda-concl>' +
             '      <div class="pda-concl-row"><span data-pda-cap="收入">今日收入</span><b class="pda-in" data-pda-in>–</b></div>' +
@@ -1206,6 +1323,7 @@
             '  </div>' +
             /* ---- 幸运打赏面板 ---- */
             '  <div class="combo-pane" data-pane="lucky" hidden>' +
+            '    <div class="combo-progress" data-ldm-progress hidden><span class="combo-progress-track"><span class="combo-progress-bar"></span></span><span class="combo-progress-text"></span></div>' +
             '    <div class="ldm-prob" data-ldm-prob>' +
             '      <span class="ldm-prob-label">下次打赏中奖率</span>' +
             '      <b class="ldm-prob-num">–</b>' +
@@ -1260,10 +1378,12 @@
             '  </div>' +
             /* ---- 称号合成统计面板 ---- */
             '  <div class="combo-pane" data-pane="syn" hidden>' +
+            '    <div class="combo-progress" data-syn-progress hidden><span class="combo-progress-track"><span class="combo-progress-bar"></span></span><span class="combo-progress-text"></span></div>' +
             '    <div class="pda-filter" data-syn-filter>' +
             '      <button type="button" class="pda-filter-btn" data-range="today">今天</button>' +
             '      <button type="button" class="pda-filter-btn" data-range="yesterday">昨天</button>' +
             '      <button type="button" class="pda-filter-btn" data-range="week">近七天</button>' +
+            '      <button type="button" class="pda-filter-btn" data-range="all">所有</button>' +
             '    </div>' +
             '    <div class="syn-concl">' +
             '      <div class="syn-card"><b class="syn-num" data-syn-count>–</b><span>合成次数</span></div>' +
@@ -1623,12 +1743,12 @@
                 ? res.incList.map(function (e) {
                     return '<li><span class="pda-li-label">' + escapeHtml(e.label) + '</span><span class="pda-li-num pda-in">+' + e.amount + '</span></li>';
                 }).join('')
-                : '<li class="pda-li-empty">' + scopeCap + '无收入</li>';
+                : '<li class="pda-li-empty">' + (currentRange === 'all' ? '' : scopeCap) + '无收入</li>';
             expEl.innerHTML = res.expList.length
                 ? res.expList.map(function (e) {
                     return '<li><span class="pda-li-label">' + escapeHtml(e.label) + '</span><span class="pda-li-num pda-out">-' + e.amount + '</span></li>';
                 }).join('')
-                : '<li class="pda-li-empty">' + scopeCap + '无支出</li>';
+                : '<li class="pda-li-empty">' + (currentRange === 'all' ? '' : scopeCap) + '无支出</li>';
 
             tlSection.hidden = false;
             tlCount.textContent = '共 ' + res.timeline.length + ' 段';
@@ -1649,11 +1769,16 @@
 
     /* ================= 称号合成：渲染 ================= */
 
-    // 切换合成统计的筛选范围（纯本地重算）
+    // 切换合成统计的筛选范围（数据够用时纯本地重算；选「所有」而手上只有近七天时重抓）
     function setSynRange(range) {
         if (!RANGES[range]) return;
         syn.range = range;
         try { localStorage.setItem(SYN_RANGE_KEY, range); } catch (e) { /* 忽略 */ }
+        if (syn.loading) { renderSyn(); return; }   // 抓取中：结束后按新范围自动补抓
+        if (syn.items && !floorCovers(syn.floor, floorForRange(range))) {
+            loadSyn(lastUid, false);
+            return;
+        }
         renderSyn();
     }
 
@@ -1807,7 +1932,7 @@
             tlSection.hidden = true;
         }
 
-        var hint = syn.note || (res.count === 0 ? cap + '没有合成记录' : '');
+        var hint = syn.note || (res.count === 0 ? (syn.range === 'all' ? '没有合成记录' : cap + '没有合成记录') : '');
         if (!hint && res.unknownTime > 0) {
             hint = '有 ' + res.unknownTime + ' 条通知没解析出时间，未计入统计';
         }
@@ -1816,6 +1941,7 @@
 
     // 抓取通知（手动刷新或首次打开该 TAB 时）
     function loadSyn(uid, manual) {
+        if (syn.loading) return;   // 已有抓取在飞：结束后会按当前范围自动补抓
         if (!uid) {
             syn.err = '未登录或未识别到用户，请登录后刷新';
             renderSyn();
@@ -1824,8 +1950,15 @@
         syn.loading = true;
         syn.err = '';
         renderSyn();
-        collectSyn(uid).then(function (r) {
+        // 下界跟随当前筛选范围：选「所有」时抓到底
+        var floor = floorForRange(syn.range);
+        var bar = progressEl('[data-syn-progress]');
+        progressStart(bar);
+        collectSyn(uid, floor, function (page, total) {
+            progressPage(bar, page, total);
+        }).then(function (r) {
             syn.items = r.items;
+            syn.floor = floor;
             syn.note = r.note || '';
             syn.filtered = r.filtered || 0;
             syn.loadedUid = uid;
@@ -1833,22 +1966,32 @@
             syn.timeText = t.getHours() + ':' + String(t.getMinutes()).padStart(2, '0') + ':' + String(t.getSeconds()).padStart(2, '0');
             syn.loading = false;
             try {
-                localStorage.setItem(SYN_KEY, JSON.stringify({
-                    day: new Date().toDateString(), items: r.items,
-                    timeText: syn.timeText, note: syn.note, filtered: syn.filtered,
-                }));
+                if (r.items.length) {
+                    localStorage.setItem(SYN_KEY, JSON.stringify({
+                        day: new Date().toDateString(), items: r.items, floor: floor,
+                        timeText: syn.timeText, note: syn.note, filtered: syn.filtered,
+                    }));
+                } else {
+                    // 空结果不缓存：否则当天会一直复用这次（可能已失效）的失败结果，
+                    // 表现为「换了脚本/修了 bug 也还是不行」
+                    localStorage.removeItem(SYN_KEY);
+                }
             } catch (e) { /* 忽略 */ }
             renderSyn();
+            progressDone(bar, true);
+            // 抓取期间用户可能切到了「所有」：手上数据没覆盖新范围时补抓一次
+            if (syn.items && !floorCovers(syn.floor, floorForRange(syn.range))) loadSyn(uid, false);
         }).catch(function (e) {
             syn.loading = false;
             syn.items = null;
             syn.filtered = 0;
             syn.err = e.message + '，点「刷新」重试';
             renderSyn();
+            progressDone(bar, false);
         });
     }
 
-    // 打开 TAB 时按需抓取（已有同一用户的数据则直接复用）
+    // 打开 TAB 时按需抓取（已有同一用户、且覆盖当前筛选范围的数据则直接复用）
     function ensureSyn() {
         if (syn.loading) return;
         var uid = lastUid;
@@ -1857,7 +2000,10 @@
             renderSyn();
             return;
         }
-        if (syn.items && syn.loadedUid === uid) { renderSyn(); return; }
+        if (syn.items && syn.loadedUid === uid && floorCovers(syn.floor, floorForRange(syn.range))) {
+            renderSyn();
+            return;
+        }
         loadSyn(uid, false);
     }
 
@@ -1873,7 +2019,10 @@
                 b.classList.toggle('pda-filter-on', b.getAttribute('data-range') === range);
             });
         }
-        if (lastRecords) {
+        // 手上数据够用就本地重算；选「所有」而手上只抓了近七天时，重抓到底
+        if (refreshing) return;   // 抓取中：这轮结束后会按新范围自动补抓，避免并发重入
+        var need = floorForRange(range);
+        if (lastRecords && floorCovers(lastFloor, need)) {
             renderPoints(analyze(filterRecords(lastRecords, range)), lastTimeText, null);
         } else if (lastUid) {
             refreshData(lastUid, false);
@@ -1881,6 +2030,8 @@
     }
 
     function refreshData(uid, manual) {
+        if (refreshing) return;
+        refreshing = true;
         var btns = widget ? widget.querySelectorAll('[data-ldm-refresh],[data-pda-refresh]') : [];
         if (manual) {
             btns.forEach(function (b) {
@@ -1888,11 +2039,21 @@
                 b.textContent = '抓取中…';
             });
         }
+        // floor 由当前筛选范围决定：普通范围只抓近七天，选「所有」时抓到底
+        var floor = floorForRange(currentRange);
+        var pdaBar = progressEl('[data-pda-progress]');
+        var ldmBar = progressEl('[data-ldm-progress]');
+        progressStart(pdaBar);
+        progressStart(ldmBar);
         // 并行抓取：积分明细 + 今日回帖数（1秒/页，两者独立翻页）
-        Promise.all([collectAll(uid), collectReplies(uid)]).then(function (results) {
+        Promise.all([collectAll(uid, floor, function (page, total) {
+            progressPage(pdaBar, page, total);
+            progressPage(ldmBar, page, total);
+        }), collectReplies(uid)]).then(function (results) {
             var repliesToday = results[1];
             lastRecords = results[0].records;
             lastUid = uid;
+            lastFloor = floor;
             // 幸运打赏固定统计今日，不受筛选范围影响
             var lucky = computeLucky(filterRecords(lastRecords, 'today'));
             var t = new Date();
@@ -1900,19 +2061,28 @@
             lastTimeText = tt;
             renderLucky(lucky, tt, null, repliesToday);
             renderPoints(analyze(filterRecords(lastRecords, currentRange)), tt, null);
+            progressDone(pdaBar, true);
+            progressDone(ldmBar, true);
             try {
                 var today = new Date().toDateString();
-                localStorage.setItem(STORE_KEY, JSON.stringify({ day: today, records: lastRecords, repliesToday: repliesToday, savedAt: Date.now() }));
+                localStorage.setItem(STORE_KEY, JSON.stringify({ day: today, records: lastRecords, repliesToday: repliesToday, floor: floor, savedAt: Date.now() }));
             } catch (e) { /* 忽略 */ }
         }).catch(function (e) {
             lastRecords = null;
+            progressDone(pdaBar, false);
+            progressDone(ldmBar, false);
             renderLucky(null, null, e.message + '，点「刷新」重试');
             renderPoints(null, null, e.message + '，点「刷新」重试');
         }).finally(function () {
+            refreshing = false;
             btns.forEach(function (b) {
                 b.disabled = false;
                 b.textContent = '刷新';
             });
+            // 抓取期间用户可能切到了「所有」：手上数据没覆盖新范围时补抓一次
+            if (lastRecords && !floorCovers(lastFloor, floorForRange(currentRange))) {
+                refreshData(uid, false);
+            }
         });
     }
 
@@ -1954,8 +2124,11 @@
             if (savedSynRange && RANGES[savedSynRange]) syn.range = savedSynRange;
             if (uid) {
                 var sc = JSON.parse(localStorage.getItem(SYN_KEY) || 'null');
-                if (sc && sc.day === new Date().toDateString() && sc.items) {
+                // 只认非空缓存：空结果是失败/无数据的产物，忽略它才能自动重抓
+                if (sc && sc.day === new Date().toDateString() && sc.items && sc.items.length) {
                     syn.items = sc.items;
+                    // 旧缓存没记录 floor：它一定是按天抓的（近七天），否则当成全量会漏抓
+                    syn.floor = (typeof sc.floor === 'undefined' ? fetchFloor() : sc.floor);
                     syn.timeText = sc.timeText || '缓存';
                     syn.note = sc.note || '';
                     syn.filtered = sc.filtered || 0;
@@ -1980,6 +2153,8 @@
             var s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
             if (s && s.day === new Date().toDateString() && s.records) {
                 lastRecords = s.records;
+                // 旧缓存没记录 floor：它一定是按天抓的（近七天），否则当成全量会漏抓
+                lastFloor = (typeof s.floor === 'undefined' ? fetchFloor() : s.floor);
                 renderLucky(computeLucky(filterRecords(s.records, 'today')), '缓存', null, typeof s.repliesToday === 'number' ? s.repliesToday : 0);
                 renderPoints(analyze(filterRecords(s.records, currentRange)), '缓存');
             }
@@ -2139,8 +2314,8 @@
 
     GM_addStyle([
         /* 面板骨架 */
-        '#linuxsb-combo{position:fixed;right:16px;bottom:16px;z-index:2147483000;width:272px;border:1px solid var(--line,#e5e7eb);border-radius:10px;background:var(--panel,#fff);color:var(--text,#1f2329);font:13px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.16);user-select:none}',
-        '#linuxsb-combo .combo-head{padding:8px 10px 7px;cursor:move;border-bottom:1px solid var(--line,#eee)}',
+        '#linuxsb-combo{position:fixed;right:16px;top:16px;z-index:2147483000;width:272px;max-height:50vh;display:flex;flex-direction:column;border:1px solid var(--line,#e5e7eb);border-radius:10px;background:var(--panel,#fff);color:var(--text,#1f2329);font:13px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.16);user-select:none}',
+        '#linuxsb-combo .combo-head{flex:0 0 auto;padding:8px 10px 7px;cursor:move;border-bottom:1px solid var(--line,#eee)}',
         '#linuxsb-combo .combo-head-top{display:flex;align-items:center;justify-content:space-between;gap:6px}',
         '#linuxsb-combo .combo-title{font-size:13px;color:var(--text,#1f2329);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
         '#linuxsb-combo .combo-head-authors{display:flex;align-items:center;gap:6px;margin-top:5px}',
@@ -2151,14 +2326,27 @@
         '#linuxsb-combo .combo-fold{width:26px;height:26px;border:1px solid var(--line,#e5e7eb);border-radius:6px;background:var(--brand-soft,rgba(0,0,0,.04));color:var(--text-muted,#6b7280);font-size:16px;line-height:1;cursor:pointer;text-align:center;padding:0}',
         '#linuxsb-combo .combo-fold:hover{color:var(--brand,#2563eb);border-color:var(--brand,#2563eb)}',
         /* TAB */
-        '#linuxsb-combo .combo-tabs{display:flex;border-bottom:1px solid var(--line,#eee);background:var(--bg,#f9fafb)}',
+        '#linuxsb-combo .combo-tabs{flex:0 0 auto;display:flex;border-bottom:1px solid var(--line,#eee);background:var(--bg,#f9fafb)}',
         '#linuxsb-combo .combo-tab{flex:1 1 0;border:0;background:none;padding:7px 1px;font-size:12px;color:var(--text-muted,#6b7280);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;position:relative}',
         '#linuxsb-combo .combo-tab.combo-tab-active{color:var(--brand,#2563eb);border-bottom-color:var(--brand,#2563eb);font-weight:600}',
         /* TAB 角标（未读提醒，闪烁） */
         '#linuxsb-combo .combo-tab-badge{position:absolute;top:3px;right:2px;min-width:14px;height:14px;line-height:14px;padding:0 3px;border-radius:999px;background:var(--danger,#dc2626);color:#fff;font-size:10px;font-weight:700;text-align:center;font-variant-numeric:tabular-nums}',
         '#linuxsb-combo .combo-tab-badge.on{animation:combo-badge-blink .8s step-end infinite alternate}',
         '@keyframes combo-badge-blink{from{opacity:1}to{opacity:.35}}',
-        '#linuxsb-combo .combo-body{padding:9px 10px 10px}',
+        '#linuxsb-combo .combo-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:9px 10px 10px}',
+        /* 抓取进度条（切换范围 / 刷新时显示，完成后短暂提示结果） */
+        '#linuxsb-combo .combo-progress{display:flex;align-items:center;gap:6px;margin-bottom:7px;font-size:11px;color:var(--text-subtle,#9ca3af)}',
+        // 作者样式的 display:flex 会盖掉 [hidden] 的 UA display:none，必须显式补一条
+        '#linuxsb-combo .combo-progress[hidden]{display:none}',
+        '#linuxsb-combo .combo-progress-track{position:relative;flex:1 1 auto;height:4px;border-radius:2px;background:var(--line,#e5e7eb);overflow:hidden}',
+        '#linuxsb-combo .combo-progress-bar{display:block;height:100%;width:0;border-radius:2px;background:var(--brand,#2563eb);transition:width .25s ease}',
+        '#linuxsb-combo .combo-progress-text{flex:0 0 auto;white-space:nowrap;font-variant-numeric:tabular-nums}',
+        '#linuxsb-combo .combo-progress.indet .combo-progress-bar{width:30%;animation:combo-progress-indet 1.1s ease-in-out infinite}',
+        '@keyframes combo-progress-indet{from{transform:translateX(-100%)}to{transform:translateX(333%)}}',
+        '#linuxsb-combo .combo-progress.combo-progress-ok .combo-progress-bar{background:var(--success,#16a34a)}',
+        '#linuxsb-combo .combo-progress.combo-progress-ok .combo-progress-text{color:var(--success,#16a34a);font-weight:600}',
+        '#linuxsb-combo .combo-progress.combo-progress-err .combo-progress-bar{background:var(--danger,#dc2626)}',
+        '#linuxsb-combo .combo-progress.combo-progress-err .combo-progress-text{color:var(--danger,#dc2626);font-weight:600}',
         '#linuxsb-combo .combo-foot{display:flex;align-items:center;gap:10px;margin-top:8px;padding-top:6px;border-top:1px dashed var(--line,#e5e7eb)}',
         '#linuxsb-combo .combo-link{border:0;background:none;color:var(--brand,#2563eb);font-size:12px;cursor:pointer;text-decoration:none;padding:0}',
         '#linuxsb-combo .combo-link:hover{text-decoration:underline}',
