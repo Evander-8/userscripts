@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.1.2
+// @version      1.1.3
 // @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 幸运打赏今日统计（概率估算·回帖解锁·玩家列表·收支），TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
@@ -125,7 +125,8 @@
         return new Promise(function (r) { setTimeout(r, ms); });
     }
 
-    function getText(url) {
+    // 扩展通道：页面 fetch 不可用时兜底（历史上一直用这条）
+    function gmGetText(url) {
         return new Promise(function (resolve, reject) {
             GM_xmlhttpRequest({
                 method: 'GET',
@@ -137,6 +138,20 @@
                 },
                 onerror: function () { reject(new Error('网络错误')); },
             });
+        });
+    }
+
+    // 取页面文本。优先走页面自己的 fetch：域名同源，用的是浏览器当前会话（Cookie、
+    // Referer、Sec-Fetch-* 都和点链接跳转一致），站点套的 Cloudflare 只会拦前者——
+    // GM_xmlhttpRequest 发出去的请求拿不到放行票据，会被 403「Just a moment...」或直接掐断。
+    // 注意这里只把 fetch 自身的失败（CSP 等）退回扩展通道，HTTP 错误照常抛出，
+    // 免得一次失败被重试成两次请求。
+    function getText(url) {
+        return fetch(url, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        }, function () {
+            return gmGetText(url);
         });
     }
 
