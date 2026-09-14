@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.1.1
+// @version      1.1.2
 // @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 幸运打赏今日统计（概率估算·回帖解锁·玩家列表·收支），TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
@@ -1258,13 +1258,28 @@
         } catch (e) { /* 忽略 */ }
     }
 
+    // 收起态圆形图标右上角的红点：有未读才显示，展开后由 TAB 角标接管
+    function syncMiniDot() {
+        if (!widget) return;
+        var dot = widget.querySelector('[data-mini-dot]');
+        if (!dot) return;
+        if (market.unread > 0) {
+            dot.textContent = market.unread > 99 ? '99+' : String(market.unread);
+            dot.hidden = false;
+        } else {
+            dot.hidden = true;
+        }
+    }
+
     // 已命中提醒：未读累计（顶部 TAB 角标闪烁）
     function markUnread() {
         market.unread++;
         var badge = widget.querySelector('[data-tab-badge]');
-        if (!badge) return;
-        badge.textContent = market.unread > 99 ? '99+' : String(market.unread);
-        badge.classList.add('on');
+        if (badge) {
+            badge.textContent = market.unread > 99 ? '99+' : String(market.unread);
+            badge.classList.add('on');
+        }
+        syncMiniDot();
     }
 
     // 初次加载称号种类列表（/gacha），解析后填入下拉；同一次加载共享同一个请求
@@ -1285,6 +1300,11 @@
         var el = document.createElement('div');
         el.id = 'linuxsb-combo';
         el.innerHTML =
+            /* 收起后只剩这一个圆形图标：点击展开，按住拖动；右上角红点=称号监控未读 */
+            '<button type="button" class="combo-mini" data-combo-mini title="展开 LINUX.SB助手" aria-label="展开 LINUX.SB助手">' +
+            '  <span class="combo-mini-icon">💎</span>' +
+            '  <span class="combo-mini-dot" data-mini-dot hidden></span>' +
+            '</button>' +
             '<div class="combo-head">' +
             '  <div class="combo-head-top">' +
             '    <strong class="combo-title">💎 LINUX.SB助手</strong>' +
@@ -1434,6 +1454,14 @@
         document.body.appendChild(el);
         widget = el; // 先挂到全局，确保 buildWidget 内 setTab(默认第二个 tab) 时 renderMarketPanel 可用 widget
 
+        // 拖动/展开后把面板夹回视口内
+        function clampPos(nx, ny) {
+            return {
+                x: Math.max(0, Math.min(window.innerWidth - el.offsetWidth, nx)),
+                y: Math.max(0, Math.min(window.innerHeight - el.offsetHeight, ny)),
+            };
+        }
+
         // 折叠（状态持久化：收起后刷新/重开页面仍保持收起）
         function setFold(folded) {
             el.classList.toggle('combo-folded', folded);
@@ -1441,9 +1469,25 @@
             try {
                 localStorage.setItem(FOLD_KEY, folded ? '1' : '0');
             } catch (e) { /* 忽略 */ }
+            // 收起时按 32px 图标算的边界，展开后可能装不下（贴右/下边缘时会被推出视口），重新夹一次
+            if (!folded && el.style.left) {
+                var p = clampPos(parseFloat(el.style.left) || 0, parseFloat(el.style.top) || 0);
+                el.style.left = p.x + 'px';
+                el.style.top = p.y + 'px';
+            }
+            syncMiniDot();
         }
         el.querySelector('[data-combo-fold]').addEventListener('click', function () {
             setFold(!el.classList.contains('combo-folded'));
+        });
+        // 收起态的圆形图标：拖动把手，同时也是「展开」按钮；
+        // 拖动过的 pointerup 后面通常紧跟一个 click，用这个标记把它吞掉，避免拖完又展开；
+        // 万一浏览器没补这个 click，标记也会自行过期，不至于把用户下一次点击吃掉
+        var miniTapGuard = false;
+        el.querySelector('[data-combo-mini]').addEventListener('click', function (e) {
+            e.preventDefault();
+            if (miniTapGuard) { miniTapGuard = false; return; }
+            setFold(false);
         });
 
         // TAB 切换
@@ -1461,6 +1505,7 @@
                 market.unread = 0;
                 var badge = widget.querySelector('[data-tab-badge]');
                 if (badge) badge.classList.remove('on');
+                syncMiniDot();
             }
             if (target === 'syn') ensureSyn(); // 首次打开时按需抓取通知
             try { localStorage.setItem(TAB_KEY, target); } catch (e) { /* 忽略 */ }
@@ -1584,27 +1629,46 @@
         // 点击面板任意处也解锁音频（方便直接点开始后第一次触发即可出声）
         on(el, 'pointerdown', function () { ensureAudio(); });
 
-        // 拖动（排除链接/按钮，保证作者链接可点击）
-        var head = el.querySelector('.combo-head');
-        var sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
-        head.addEventListener('pointerdown', function (e) {
-            if (e.target.closest('a, button')) return; // 链接 / 按钮不触发拖动
-            dragging = true;
-            sx = e.clientX; sy = e.clientY;
-            var rect = el.getBoundingClientRect();
-            ox = rect.left; oy = rect.top;
-            head.setPointerCapture(e.pointerId);
+        // 拖动：展开态拖标题行，收起态拖圆形图标。
+        // 后者同时是「展开」按钮，所以加 4px 移动阈值区分点击与拖动
+        function bindDrag(handle, opts) {
+            var skip = opts && opts.skipInteractive;
+            var sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, moved = false;
+            handle.addEventListener('pointerdown', function (e) {
+                if (skip && e.target.closest('a, button')) return; // 链接 / 按钮不触发拖动
+                dragging = true; moved = false;
+                sx = e.clientX; sy = e.clientY;
+                var rect = el.getBoundingClientRect();
+                ox = rect.left; oy = rect.top;
+                handle.setPointerCapture(e.pointerId);
+            });
+            handle.addEventListener('pointermove', function (e) {
+                if (!dragging) return;
+                if (!moved) {
+                    if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) <= 4) return;
+                    moved = true;
+                }
+                var p = clampPos(ox + e.clientX - sx, oy + e.clientY - sy);
+                el.style.left = p.x + 'px';
+                el.style.top = p.y + 'px';
+                el.style.right = 'auto';
+                el.style.bottom = 'auto';
+            });
+            handle.addEventListener('pointerup', function () {
+                if (!dragging) return;
+                dragging = false;
+                // 发生过拖动 → 吞掉紧随其后的 click；纯点击则交给 click 处理（展开）
+                if (moved && opts && opts.onDragged) opts.onDragged();
+            });
+            handle.addEventListener('pointercancel', function () { dragging = false; });
+        }
+        bindDrag(el.querySelector('.combo-head'), { skipInteractive: true });
+        bindDrag(el.querySelector('[data-combo-mini]'), {
+            onDragged: function () {
+                miniTapGuard = true;
+                setTimeout(function () { miniTapGuard = false; }, 400);
+            },
         });
-        head.addEventListener('pointermove', function (e) {
-            if (!dragging) return;
-            var nx = Math.max(0, Math.min(window.innerWidth - el.offsetWidth, ox + e.clientX - sx));
-            var ny = Math.max(0, Math.min(window.innerHeight - el.offsetHeight, oy + e.clientY - sy));
-            el.style.left = nx + 'px';
-            el.style.top = ny + 'px';
-            el.style.right = 'auto';
-            el.style.bottom = 'auto';
-        });
-        head.addEventListener('pointerup', function () { dragging = false; });
         return el;
     }
 
@@ -2347,6 +2411,11 @@
         '#linuxsb-combo .combo-author-2:hover{color:#fff;background:var(--brand,#2563eb)}',
         '#linuxsb-combo .combo-fold{width:26px;height:26px;border:1px solid var(--line,#e5e7eb);border-radius:6px;background:var(--brand-soft,rgba(0,0,0,.04));color:var(--text-muted,#6b7280);font-size:16px;line-height:1;cursor:pointer;text-align:center;padding:0}',
         '#linuxsb-combo .combo-fold:hover{color:var(--brand,#2563eb);border-color:var(--brand,#2563eb)}',
+        /* 收起态：只留一个圆形图标，点击展开、按住拖动 */
+        '#linuxsb-combo .combo-mini{display:none;position:relative;width:32px;height:32px;padding:0;border:1px solid var(--line,#e5e7eb);border-radius:50%;background:var(--panel,#fff);box-shadow:0 4px 14px rgba(0,0,0,.18);cursor:grab;align-items:center;justify-content:center}',
+        '#linuxsb-combo .combo-mini:active{cursor:grabbing}',
+        '#linuxsb-combo .combo-mini-icon{font-size:17px;line-height:1}',
+        '#linuxsb-combo .combo-mini-dot{position:absolute;top:-5px;right:-5px;box-sizing:border-box;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:999px;background:var(--danger,#dc2626);color:#fff;font-size:10px;font-weight:700;text-align:center;font-variant-numeric:tabular-nums;box-shadow:0 0 0 2px var(--panel,#fff);animation:combo-badge-blink .8s step-end infinite alternate}',
         /* TAB */
         '#linuxsb-combo .combo-tabs{flex:0 0 auto;display:flex;border-bottom:1px solid var(--line,#eee);background:var(--bg,#f9fafb)}',
         '#linuxsb-combo .combo-tab{flex:1 1 0;border:0;background:none;padding:7px 1px;font-size:12px;color:var(--text-muted,#6b7280);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;position:relative}',
@@ -2375,7 +2444,10 @@
         '#linuxsb-combo .combo-link:disabled{color:var(--text-subtle,#9ca3af);cursor:default;text-decoration:none}',
         '#linuxsb-combo .combo-time{margin-left:auto;color:var(--text-subtle,#9ca3af);font-size:11px}',
         '#linuxsb-combo .syn-filtered{margin-top:7px;color:var(--text-subtle,#9ca3af);font-size:11px;line-height:1.5}',
-        '#linuxsb-combo.combo-folded .combo-body{display:none}',
+        /* 收起：隐形容器 + 只显示圆形图标（宽高交给图标自己撑，去掉面板边框/底色/阴影） */
+        '#linuxsb-combo.combo-folded{width:auto;max-height:none;border:0;border-radius:0;background:none;box-shadow:none}',
+        '#linuxsb-combo.combo-folded .combo-mini{display:flex}',
+        '#linuxsb-combo.combo-folded .combo-head,#linuxsb-combo.combo-folded .combo-tabs,#linuxsb-combo.combo-folded .combo-body{display:none}',
         /* ---- 幸运打赏 ---- */
         '#linuxsb-combo .ldm-prob{display:flex;flex-direction:column;gap:1px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--line,#e5e7eb);border-radius:8px;background:var(--brand-soft,rgba(37,99,235,.06))}',
         '#linuxsb-combo .ldm-prob-label{color:var(--text-muted,#6b7280);font-size:11px}',
