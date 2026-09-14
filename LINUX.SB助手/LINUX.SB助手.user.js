@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.1.3
+// @version      1.1.4
 // @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 幸运打赏今日统计（概率估算·回帖解锁·玩家列表·收支），TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
@@ -68,6 +68,8 @@
     ];
 
     var widget = null;
+    var miniBtnEl = null;        // 收起态的入口按钮（会被嵌进站点顶栏，不在面板里）
+    var miniDotEl = null;        // 该按钮上的未读红点
     var lastRecords = null;      // 最近一次抓取到的记录（跨多个自然日，供筛选切换时本地重算）
     var lastFloor = null;        // lastRecords 的抓取下界（null＝全量）
     var lastTimeText = '';       // 最近一次抓取完成时间（切换筛选时沿用）
@@ -1273,16 +1275,33 @@
         } catch (e) { /* 忽略 */ }
     }
 
-    // 收起态圆形图标右上角的红点：有未读才显示，展开后由 TAB 角标接管
+    // 收起入口按钮右上角的红点：有未读才显示，展开后由面板内的 TAB 角标接管
     function syncMiniDot() {
-        if (!widget) return;
-        var dot = widget.querySelector('[data-mini-dot]');
-        if (!dot) return;
+        ensureMiniMounted();
+        if (!miniDotEl) return;
         if (market.unread > 0) {
-            dot.textContent = market.unread > 99 ? '99+' : String(market.unread);
-            dot.hidden = false;
+            miniDotEl.textContent = market.unread > 99 ? '99+' : String(market.unread);
+            miniDotEl.hidden = false;
         } else {
-            dot.hidden = true;
+            miniDotEl.hidden = true;
+        }
+    }
+
+    // 入口按钮该待的地方：站点顶栏「搜索框之后」的插槽（主题自带的 data-slot）。
+    // 站点若重绘顶栏把按钮挤掉，这里负责把它放回去；插槽本身没了就退回面板内的浮标
+    function mountMiniInline(btn) {
+        var slot = document.querySelector('.bar-right [data-slot="top.actions.right.after-search"]');
+        if (!slot || !slot.getClientRects().length) return false;
+        btn.classList.add('combo-mini-inline');
+        slot.appendChild(btn);
+        return true;
+    }
+
+    function ensureMiniMounted() {
+        if (!miniBtnEl || miniBtnEl.isConnected) return;
+        if (!mountMiniInline(miniBtnEl)) {
+            miniBtnEl.classList.remove('combo-mini-inline');
+            if (widget) widget.appendChild(miniBtnEl);
         }
     }
 
@@ -1315,8 +1334,8 @@
         var el = document.createElement('div');
         el.id = 'linuxsb-combo';
         el.innerHTML =
-            /* 收起后只剩这一个圆形图标：点击展开，按住拖动；右上角红点=称号监控未读 */
-            '<button type="button" class="combo-mini" data-combo-mini title="展开 LINUX.SB助手" aria-label="展开 LINUX.SB助手">' +
+            /* 收起入口：会被嵌到站点顶栏最后一格（点开/收起面板），找不到位置时退回右上角浮标；右上角红点=称号监控未读 */
+            '<button type="button" id="linuxsb-combo-mini" class="combo-mini" data-combo-mini title="展开 LINUX.SB助手" aria-label="LINUX.SB助手" aria-expanded="true">' +
             '  <span class="combo-mini-icon">💎</span>' +
             '  <span class="combo-mini-dot" data-mini-dot hidden></span>' +
             '</button>' +
@@ -1469,6 +1488,18 @@
         document.body.appendChild(el);
         widget = el; // 先挂到全局，确保 buildWidget 内 setTab(默认第二个 tab) 时 renderMarketPanel 可用 widget
 
+        // 入口按钮：优先嵌进站点顶栏，嵌不进去就留在面板里当浮标
+        miniBtnEl = el.querySelector('[data-combo-mini]');
+        miniDotEl = el.querySelector('[data-mini-dot]');
+        mountMiniInline(miniBtnEl);
+
+        // 面板默认停在顶栏下方：入口按钮就在顶栏上，别把顶栏盖住（拖动过以后按拖动的位置）
+        var barEl = document.querySelector('.top > .bar');
+        if (barEl) {
+            var barH = Math.round(barEl.getBoundingClientRect().height);
+            if (barH > 0) el.style.top = (barH + 8) + 'px';
+        }
+
         // 拖动/展开后把面板夹回视口内
         function clampPos(nx, ny) {
             return {
@@ -1481,6 +1512,8 @@
         function setFold(folded) {
             el.classList.toggle('combo-folded', folded);
             el.querySelector('[data-combo-fold]').textContent = folded ? '⬆️' : '⬇️';
+            miniBtnEl.title = folded ? '展开 LINUX.SB助手' : '收起 LINUX.SB助手';
+            miniBtnEl.setAttribute('aria-expanded', folded ? 'false' : 'true');
             try {
                 localStorage.setItem(FOLD_KEY, folded ? '1' : '0');
             } catch (e) { /* 忽略 */ }
@@ -1495,14 +1528,14 @@
         el.querySelector('[data-combo-fold]').addEventListener('click', function () {
             setFold(!el.classList.contains('combo-folded'));
         });
-        // 收起态的圆形图标：拖动把手，同时也是「展开」按钮；
-        // 拖动过的 pointerup 后面通常紧跟一个 click，用这个标记把它吞掉，避免拖完又展开；
+        // 入口按钮既是开合开关，也是浮标形态下的拖动把手：
+        // 拖动过的 pointerup 后面通常紧跟一个 click，用这个标记把它吞掉，避免拖完又收起；
         // 万一浏览器没补这个 click，标记也会自行过期，不至于把用户下一次点击吃掉
         var miniTapGuard = false;
-        el.querySelector('[data-combo-mini]').addEventListener('click', function (e) {
+        miniBtnEl.addEventListener('click', function (e) {
             e.preventDefault();
             if (miniTapGuard) { miniTapGuard = false; return; }
-            setFold(false);
+            setFold(!el.classList.contains('combo-folded'));
         });
 
         // TAB 切换
@@ -1644,13 +1677,14 @@
         // 点击面板任意处也解锁音频（方便直接点开始后第一次触发即可出声）
         on(el, 'pointerdown', function () { ensureAudio(); });
 
-        // 拖动：展开态拖标题行，收起态拖圆形图标。
-        // 后者同时是「展开」按钮，所以加 4px 移动阈值区分点击与拖动
+        // 拖动：展开态拖标题行，浮标形态下拖入口按钮。
+        // 按钮同时是开关，所以加 4px 移动阈值区分点击与拖动
         function bindDrag(handle, opts) {
             var skip = opts && opts.skipInteractive;
             var sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, moved = false;
             handle.addEventListener('pointerdown', function (e) {
                 if (skip && e.target.closest('a, button')) return; // 链接 / 按钮不触发拖动
+                if (opts && opts.canDrag && !opts.canDrag()) return; // 嵌在顶栏里时它是个导航项，不该能拖
                 dragging = true; moved = false;
                 sx = e.clientX; sy = e.clientY;
                 var rect = el.getBoundingClientRect();
@@ -1678,12 +1712,18 @@
             handle.addEventListener('pointercancel', function () { dragging = false; });
         }
         bindDrag(el.querySelector('.combo-head'), { skipInteractive: true });
-        bindDrag(el.querySelector('[data-combo-mini]'), {
+        bindDrag(miniBtnEl, {
+            canDrag: function () { return !miniBtnEl.classList.contains('combo-mini-inline'); },
             onDragged: function () {
                 miniTapGuard = true;
                 setTimeout(function () { miniTapGuard = false; }, 400);
             },
         });
+
+        // 恢复上次的收起状态（收起后刷新/重开页面仍保持收起）
+        var folded = false;
+        try { folded = localStorage.getItem(FOLD_KEY) === '1'; } catch (e) { /* 忽略 */ }
+        setFold(folded);
         return el;
     }
 
@@ -2240,14 +2280,7 @@
 
         widget = buildWidget(uid || '0');
 
-        // 恢复折叠状态（收起状态保持，不展开）
-        try {
-            if (localStorage.getItem(FOLD_KEY) === '1') {
-                widget.classList.add('combo-folded');
-                var foldBtn = widget.querySelector('[data-combo-fold]');
-                if (foldBtn) foldBtn.textContent = '⬆️';
-            }
-        } catch (e) { /* 忽略 */ }
+        // 收起状态由 buildWidget 内部按 FOLD_KEY 恢复（按钮文案/aria 也要跟着变，统一放在 setFold 里）
 
         // 先展示缓存(当天，含近七天记录)再后台刷新
         try {
@@ -2426,11 +2459,18 @@
         '#linuxsb-combo .combo-author-2:hover{color:#fff;background:var(--brand,#2563eb)}',
         '#linuxsb-combo .combo-fold{width:26px;height:26px;border:1px solid var(--line,#e5e7eb);border-radius:6px;background:var(--brand-soft,rgba(0,0,0,.04));color:var(--text-muted,#6b7280);font-size:16px;line-height:1;cursor:pointer;text-align:center;padding:0}',
         '#linuxsb-combo .combo-fold:hover{color:var(--brand,#2563eb);border-color:var(--brand,#2563eb)}',
-        /* 收起态：只留一个圆形图标，点击展开、按住拖动 */
-        '#linuxsb-combo .combo-mini{display:none;position:relative;width:32px;height:32px;padding:0;border:1px solid var(--line,#e5e7eb);border-radius:50%;background:var(--panel,#fff);box-shadow:0 4px 14px rgba(0,0,0,.18);cursor:grab;align-items:center;justify-content:center}',
-        '#linuxsb-combo .combo-mini:active{cursor:grabbing}',
-        '#linuxsb-combo .combo-mini-icon{font-size:17px;line-height:1}',
-        '#linuxsb-combo .combo-mini-dot{position:absolute;top:-5px;right:-5px;box-sizing:border-box;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:999px;background:var(--danger,#dc2626);color:#fff;font-size:10px;font-weight:700;text-align:center;font-variant-numeric:tabular-nums;box-shadow:0 0 0 2px var(--panel,#fff);animation:combo-badge-blink .8s step-end infinite alternate}',
+        /* 入口按钮：默认嵌在站点顶栏（.combo-mini-inline），找不到位置时退回面板内的浮标。
+           按钮会被搬出 #linuxsb-combo，所以这些样式只按它自己的 id 写，不依赖面板祖先 */
+        '#linuxsb-combo-mini{box-sizing:border-box;display:none;position:relative;align-items:center;justify-content:center;padding:0;cursor:pointer;font:inherit}',
+        '#linuxsb-combo-mini .combo-mini-icon{font-size:17px;line-height:1}',
+        '#linuxsb-combo-mini .combo-mini-dot{position:absolute;top:-4px;right:-4px;box-sizing:border-box;min-width:14px;height:14px;line-height:14px;padding:0 3px;border-radius:999px;background:var(--danger,#dc2626);color:#fff;font-size:10px;font-weight:700;text-align:center;font-variant-numeric:tabular-nums;box-shadow:0 0 0 2px var(--panel,#fff);animation:combo-badge-blink .8s step-end infinite alternate}',
+        /* 嵌顶栏：跟旁边「切换色系」按钮同款（尺寸/圆角/配色都取站点变量，站点换色系时一起变） */
+        '#linuxsb-combo-mini.combo-mini-inline{display:inline-flex;flex:0 0 30px;width:30px;height:30px;min-height:30px;border:1px solid var(--line,#e8e8e8);border-radius:var(--radius-sm,4px);background:var(--panel,#fff);color:var(--text-muted,#6b7280)}',
+        '#linuxsb-combo-mini.combo-mini-inline:hover{border-color:var(--brand,#334155);background:var(--brand-soft,rgba(0,0,0,.04));color:var(--brand,#334155)}',
+        '#linuxsb-combo-mini.combo-mini-inline .combo-mini-icon{font-size:15px}',
+        /* 浮标：收起时才出现，可拖动 */
+        '#linuxsb-combo.combo-folded #linuxsb-combo-mini:not(.combo-mini-inline){display:flex;width:32px;height:32px;border:1px solid var(--line,#e5e7eb);border-radius:50%;background:var(--panel,#fff);box-shadow:0 4px 14px rgba(0,0,0,.18);cursor:grab}',
+        '#linuxsb-combo.combo-folded #linuxsb-combo-mini:not(.combo-mini-inline):active{cursor:grabbing}',
         /* TAB */
         '#linuxsb-combo .combo-tabs{flex:0 0 auto;display:flex;border-bottom:1px solid var(--line,#eee);background:var(--bg,#f9fafb)}',
         '#linuxsb-combo .combo-tab{flex:1 1 0;border:0;background:none;padding:7px 1px;font-size:12px;color:var(--text-muted,#6b7280);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;position:relative}',
@@ -2459,9 +2499,8 @@
         '#linuxsb-combo .combo-link:disabled{color:var(--text-subtle,#9ca3af);cursor:default;text-decoration:none}',
         '#linuxsb-combo .combo-time{margin-left:auto;color:var(--text-subtle,#9ca3af);font-size:11px}',
         '#linuxsb-combo .syn-filtered{margin-top:7px;color:var(--text-subtle,#9ca3af);font-size:11px;line-height:1.5}',
-        /* 收起：隐形容器 + 只显示圆形图标（宽高交给图标自己撑，去掉面板边框/底色/阴影） */
+        /* 收起：面板整体隐身（入口按钮在顶栏上，或退成下方那个浮标） */
         '#linuxsb-combo.combo-folded{width:auto;max-height:none;border:0;border-radius:0;background:none;box-shadow:none}',
-        '#linuxsb-combo.combo-folded .combo-mini{display:flex}',
         '#linuxsb-combo.combo-folded .combo-head,#linuxsb-combo.combo-folded .combo-tabs,#linuxsb-combo.combo-folded .combo-body{display:none}',
         /* ---- 幸运打赏 ---- */
         '#linuxsb-combo .ldm-prob{display:flex;flex-direction:column;gap:1px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--line,#e5e7eb);border-radius:8px;background:var(--brand-soft,rgba(37,99,235,.06))}',
