@@ -32,7 +32,6 @@
     };
     var RULE_URL = 'https://linux.sb/topic/20953';
     var STORE_KEY = 'linuxsb-combo-v310';
-    var FOLD_KEY = 'linuxsb-combo-fold-v307';
     var MARKET_KEY = 'linuxsb-market-v309';   // 称号监控配置 + 状态（localStorage 持久化）
     var TAB_KEY = 'linuxsb-combo-tab-v309';   // 记住当前激活的 TAB（刷新后保持，不切回默认）
     var RANGE_KEY = 'linuxsb-combo-range-v310'; // 记住积分分析的筛选范围（今天/昨天/近七天）
@@ -1342,11 +1341,7 @@
             '<div class="combo-head">' +
             '  <div class="combo-head-top">' +
             '    <strong class="combo-title">💎 LINUX.SB助手</strong>' +
-            '    <button type="button" class="combo-fold" data-combo-fold title="收起/展开" aria-label="收起/展开">⬇️</button>' +
-            '  </div>' +
-            '  <div class="combo-head-authors">' +
-            '    <a class="combo-author" href="https://linux.sb/user/313" target="_blank" rel="noopener" title="原作者：豆包本包">原作者</a>' +
-            '    <a class="combo-author combo-author-2" href="https://linux.sb/user/13467" target="_blank" rel="noopener" title="二开作者：Evanders">二开作者</a>' +
+            '    <button type="button" class="combo-about-btn" data-combo-about title="关于本脚本" aria-label="关于" aria-haspopup="dialog">关于</button>' +
             '  </div>' +
             '</div>' +
             '<div class="combo-tabs">' +
@@ -1483,6 +1478,27 @@
             '      <span class="combo-time" data-syn-time></span>' +
             '    </div>' +
             '  </div>' +
+            '</div>' +
+            /* 关于：盖掉整个面板（头部/TAB/内容区一起让位），不铺满屏幕、不遮网页 */
+            '<div class="combo-about-mask" data-about-mask hidden>' +
+            '  <div class="combo-about-box" role="dialog" aria-modal="false" aria-label="关于 LINUX.SB助手">' +
+            '    <div class="combo-about-head">' +
+            '      <strong>💎 关于 LINUX.SB助手</strong>' +
+            '      <button type="button" class="combo-about-x" data-about-close aria-label="关闭">✕</button>' +
+            '    </div>' +
+            '    <div class="combo-about-body">' +
+            '      <div class="combo-about-row"><span>版本</span><b data-about-ver>–</b><i class="combo-about-lic">MIT 许可</i></div>' +
+            '      <div class="combo-about-row"><span>原作者</span><a href="https://linux.sb/user/313" target="_blank" rel="noopener">豆包本包</a></div>' +
+            '      <div class="combo-about-row"><span>二开作者</span><a href="https://linux.sb/user/13467" target="_blank" rel="noopener">Evanders</a></div>' +
+            '      <div class="combo-about-row"><span>仓库</span><a href="https://github.com/Evander-8/userscripts" target="_blank" rel="noopener" title="https://github.com/Evander-8/userscripts">Evander-8/userscripts</a></div>' +
+            '      <div class="combo-about-sec">这是什么</div>' +
+            '      <div class="combo-about-text">把积分流水、称号合成、称号市场行情、幸运打赏收进右上角一个浮窗，切标签页就看。</div>' +
+            '      <div class="combo-about-sec">二开说明</div>' +
+            '      <div class="combo-about-text">积分分析、合成统计、称号监控、幸运打赏的原始实现都来自原作者，二开版在此基础上做增量与界面调整。</div>' +
+            '      <div class="combo-about-sec">数据与隐私</div>' +
+            '      <div class="combo-about-text">请求由本页自身的 fetch 发出（带你的登录态），数据只在浏览器本地解析与缓存，不上传第三方。</div>' +
+            '    </div>' +
+            '  </div>' +
             '</div>';
 
         document.body.appendChild(el);
@@ -1508,15 +1524,12 @@
             };
         }
 
-        // 折叠（状态持久化：收起后刷新/重开页面仍保持收起）
+        // 折叠：开合只由入口按钮控制，状态不跨页面保留（每次刷新/进入页面都从收起态开始）
         function setFold(folded) {
             el.classList.toggle('combo-folded', folded);
-            el.querySelector('[data-combo-fold]').textContent = folded ? '⬆️' : '⬇️';
+            if (folded) setAbout(false); // 收起时没有地方放关于内容
             miniBtnEl.title = folded ? '展开 LINUX.SB助手' : '收起 LINUX.SB助手';
             miniBtnEl.setAttribute('aria-expanded', folded ? 'false' : 'true');
-            try {
-                localStorage.setItem(FOLD_KEY, folded ? '1' : '0');
-            } catch (e) { /* 忽略 */ }
             // 收起时按 32px 图标算的边界，展开后可能装不下（贴右/下边缘时会被推出视口），重新夹一次
             if (!folded && el.style.left) {
                 var p = clampPos(parseFloat(el.style.left) || 0, parseFloat(el.style.top) || 0);
@@ -1525,9 +1538,6 @@
             }
             syncMiniDot();
         }
-        el.querySelector('[data-combo-fold]').addEventListener('click', function () {
-            setFold(!el.classList.contains('combo-folded'));
-        });
         // 入口按钮既是开合开关，也是浮标形态下的拖动把手：
         // 拖动过的 pointerup 后面通常紧跟一个 click，用这个标记把它吞掉，避免拖完又收起；
         // 万一浏览器没补这个 click，标记也会自行过期，不至于把用户下一次点击吃掉
@@ -1536,6 +1546,33 @@
             e.preventDefault();
             if (miniTapGuard) { miniTapGuard = false; return; }
             setFold(!el.classList.contains('combo-folded'));
+        });
+        // 点面板与入口按钮以外的地方就收起（关于一并关掉）。
+        // 入口按钮会被搬到站点顶栏、跑到面板外面，所以它要单独放行
+        document.addEventListener('pointerdown', function (e) {
+            if (el.contains(e.target) || miniBtnEl.contains(e.target)) return;
+            if (!el.classList.contains('combo-folded')) setFold(true);
+        }, true);
+
+        // 关于弹窗
+        var aboutMask = el.querySelector('[data-about-mask]');
+        var aboutVerEl = el.querySelector('[data-about-ver]');
+        try {
+            aboutVerEl.textContent = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '未知';
+        } catch (e) {
+            aboutVerEl.textContent = '未知';
+        }
+        function setAbout(open) {
+            aboutMask.hidden = !open;
+            el.classList.toggle('combo-about-open', open); // 头部、TAB、内容区一起让位给关于视图
+            el.querySelector('[data-combo-about]').setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) el.querySelector('[data-about-close]').focus();
+        }
+        // 同一个按钮点第二次就是关掉
+        el.querySelector('[data-combo-about]').addEventListener('click', function () { setAbout(aboutMask.hidden); });
+        el.querySelector('[data-about-close]').addEventListener('click', function () { setAbout(false); });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && !aboutMask.hidden) setAbout(false);
         });
 
         // TAB 切换
@@ -1720,10 +1757,8 @@
             },
         });
 
-        // 恢复上次的收起状态（收起后刷新/重开页面仍保持收起）
-        var folded = false;
-        try { folded = localStorage.getItem(FOLD_KEY) === '1'; } catch (e) { /* 忽略 */ }
-        setFold(folded);
+        // 每次进页面/刷新都从收起态开始（不记住上次的展开状态）
+        setFold(true);
         return el;
     }
 
@@ -2280,8 +2315,6 @@
 
         widget = buildWidget(uid || '0');
 
-        // 收起状态由 buildWidget 内部按 FOLD_KEY 恢复（按钮文案/aria 也要跟着变，统一放在 setFold 里）
-
         // 先展示缓存(当天，含近七天记录)再后台刷新
         try {
             var s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
@@ -2452,13 +2485,27 @@
         '#linuxsb-combo .combo-head{flex:0 0 auto;padding:8px 10px 7px;cursor:move;border-bottom:1px solid var(--line,#eee)}',
         '#linuxsb-combo .combo-head-top{display:flex;align-items:center;justify-content:space-between;gap:6px}',
         '#linuxsb-combo .combo-title{font-size:13px;color:var(--text,#1f2329);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-        '#linuxsb-combo .combo-head-authors{display:flex;align-items:center;gap:6px;margin-top:5px}',
-        '#linuxsb-combo .combo-author{color:var(--text-muted,#6b7280);font-size:11px;text-decoration:none;white-space:nowrap;padding:2px 6px;border:1px solid var(--line,#e5e7eb);border-radius:6px;background:var(--brand-soft,rgba(0,0,0,.03))}',
-        '#linuxsb-combo .combo-author:hover{color:var(--brand,#2563eb);border-color:var(--brand,#2563eb)}',
-        '#linuxsb-combo .combo-author-2{color:var(--brand,#2563eb);border-color:var(--brand,#2563eb);background:rgba(37,99,235,.08)}',
-        '#linuxsb-combo .combo-author-2:hover{color:#fff;background:var(--brand,#2563eb)}',
-        '#linuxsb-combo .combo-fold{width:26px;height:26px;border:1px solid var(--line,#e5e7eb);border-radius:6px;background:var(--brand-soft,rgba(0,0,0,.04));color:var(--text-muted,#6b7280);font-size:16px;line-height:1;cursor:pointer;text-align:center;padding:0}',
-        '#linuxsb-combo .combo-fold:hover{color:var(--brand,#2563eb);border-color:var(--brand,#2563eb)}',
+        '#linuxsb-combo .combo-about-btn{flex:0 0 auto;height:26px;padding:0 9px;border:1px solid var(--line,#e5e7eb);border-radius:6px;background:var(--brand-soft,rgba(0,0,0,.04));color:var(--text-muted,#6b7280);font-size:12px;line-height:1;cursor:pointer}',
+        '#linuxsb-combo .combo-about-btn:hover{color:var(--brand,#2563eb);border-color:var(--brand,#2563eb)}',
+        /* 关于：直接盖掉整个面板（标题行一起让位），面板高度随内容自适应；不铺满屏幕、不遮网页 */
+        '#linuxsb-combo .combo-about-mask{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--panel,#fff);cursor:default;overflow:hidden;animation:combo-about-in .12s ease-out}',
+        '#linuxsb-combo .combo-about-mask[hidden]{display:none}',
+        '#linuxsb-combo.combo-about-open .combo-head,#linuxsb-combo.combo-about-open .combo-tabs,#linuxsb-combo.combo-about-open .combo-body{display:none}',
+        '#linuxsb-combo .combo-about-box{display:flex;flex:1 1 auto;min-height:0;flex-direction:column}',
+        '@keyframes combo-about-in{from{opacity:0}to{opacity:1}}',
+        '#linuxsb-combo .combo-about-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px 7px;border-bottom:1px solid var(--line,#eee)}',
+        '#linuxsb-combo .combo-about-head strong{font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '#linuxsb-combo .combo-about-x{flex:0 0 auto;width:24px;height:24px;border:1px solid transparent;border-radius:6px;background:none;color:var(--text-muted,#6b7280);font-size:12px;line-height:1;cursor:pointer;padding:0}',
+        '#linuxsb-combo .combo-about-x:hover{color:var(--danger,#dc2626);border-color:var(--line,#e5e7eb);background:var(--brand-soft,rgba(0,0,0,.04))}',
+        '#linuxsb-combo .combo-about-body{flex:1 1 auto;min-height:0;overflow:auto;padding:10px}',
+        '#linuxsb-combo .combo-about-row{display:flex;align-items:baseline;gap:8px;padding:2px 0;font-size:12px;line-height:1.4}',
+        '#linuxsb-combo .combo-about-row>span{flex:0 0 56px;color:var(--text-subtle,#9ca3af)}',
+        '#linuxsb-combo .combo-about-row>b{font-weight:600;font-variant-numeric:tabular-nums}',
+        '#linuxsb-combo .combo-about-lic{margin-left:auto;color:var(--text-subtle,#9ca3af);font-style:normal;font-size:11px}',
+        '#linuxsb-combo .combo-about-row>a{color:var(--brand,#2563eb);text-decoration:none;overflow-wrap:anywhere}',
+        '#linuxsb-combo .combo-about-row>a:hover{text-decoration:underline}',
+        '#linuxsb-combo .combo-about-sec{margin:8px 0 2px;padding-top:7px;border-top:1px dashed var(--line,#e5e7eb);color:var(--text-muted,#6b7280);font-size:11px;font-weight:600}',
+        '#linuxsb-combo .combo-about-text{color:var(--text-muted,#6b7280);font-size:12px;line-height:1.6}',
         /* 入口按钮：默认嵌在站点顶栏（.combo-mini-inline），找不到位置时退回面板内的浮标。
            按钮会被搬出 #linuxsb-combo，所以这些样式只按它自己的 id 写，不依赖面板祖先 */
         '#linuxsb-combo-mini{box-sizing:border-box;display:none;position:relative;align-items:center;justify-content:center;padding:0;cursor:pointer;font:inherit}',
