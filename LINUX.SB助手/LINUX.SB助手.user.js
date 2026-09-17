@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.1.4
+// @version      1.1.5
 // @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 幸运打赏今日统计（概率估算·回帖解锁·玩家列表·收支），TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
@@ -51,16 +51,24 @@
     var LUCKY_RE = /幸运(?:打赏)?奖励/;
     var RECEIVED_RE = /^用户「.+?」打赏了你的主题$/;
 
-    // 积分分析的 reason 分类规则
+    // 积分分析的 reason 分类规则（自上而下，先匹配到的生效）
     var RULES = [
         { key: 'donate_out',   label: '打赏用户', re: /^给用户「.+?」的主题打赏$/ },
         { key: 'donate_in',    label: '被打赏',   re: /^用户「.+?」打赏了你的主题$/ },
         { key: 'lucky',        label: '幸运奖励', re: /幸运(?:打赏)?奖励/ },
+        // 称号出售 / 回收要排在 gacha 前面：回收的文案「SSR 回收:称号系统」里也带「称号系统」
+        { key: 'title_sell',   label: '称号出售', re: /出售称号|回收:称号系统/ },
         { key: 'gacha',        label: '抽奖',     re: /十连抽|百连抽|十抽|抽奖|称号系统/ },
         { key: 'title_buy',    label: '称号购买', re: /购买称号/ },
         { key: 'checkin',      label: '每日签到', re: /每日签到|签到/ },
         { key: 'topic',        label: '发表主题', re: /发表主题/ },
         { key: 'reply',        label: '发表回帖', re: /发表回帖|回帖奖励/ },
+        { key: 'ad',           label: '广告奖励', re: /侧边栏广告奖励/ },
+        { key: 'game',         label: '小游戏',   re: /大乱斗|击杀奖励/ },
+        { key: 'essence',      label: '精华相关', re: /被评为精华|精华投票奖池|精华竞猜/ },
+        { key: 'invite',       label: '邀请奖励', re: /邀请.*奖励/ },
+        { key: 'coin',         label: '回帖投币', re: /收到投币/ },
+        { key: 'card',         label: '虚拟卡兑换', re: /虚拟卡/ },
         { key: 'search',       label: '搜索',     re: /搜索/ },
         { key: 'direct',       label: '私信',     re: /私信/ },
         { key: 'attachment',   label: '下载附件', re: /附件/ },
@@ -2412,11 +2420,21 @@
                 ? { key: 'other_in', label: '其他收入' }
                 : { key: 'other_out', label: '其他支出' };
         }
+        // 收入按「来源」分开记：不认识的才落到「其他收入」
+        var IN_BUCKETS = {
+            lucky:      { key: 'in_lucky',   label: '幸运奖励' },
+            donate_in:  { key: 'in_donate',  label: '被打赏' },
+            title_sell: { key: 'in_title',   label: '称号出售' },
+            checkin:    { key: 'in_checkin', label: '每日签到' },
+            ad:         { key: 'in_ad',      label: '广告奖励' },
+            game:       { key: 'in_game',    label: '小游戏奖励' },
+            essence:    { key: 'in_essence', label: '精华奖励' },
+            topic:      { key: 'in_topic',   label: '发帖奖励' },
+            reply:      { key: 'in_reply',   label: '回帖奖励' },
+        };
         function bucketFor(cat, delta) {
             if (delta >= 0) {
-                if (cat.key === 'lucky') return { key: 'in_lucky', label: '幸运奖励' };
-                if (cat.key === 'donate_in') return { key: 'in_donate', label: '被打赏' };
-                return { key: 'in_other', label: '其他收入' };
+                return IN_BUCKETS[cat.key] || { key: 'in_other', label: '其他收入' };
             }
             if (cat.key === 'gacha' || cat.key === 'title_buy') return { key: 'out_gacha', label: '称号系统' };
             if (cat.key === 'donate_out') return { key: 'out_donate', label: '打赏支出' };
@@ -2460,7 +2478,7 @@
             }
         });
 
-        var IN_ORDER = ['in_lucky', 'in_donate', 'in_other'];
+        var IN_ORDER = ['in_lucky', 'in_donate', 'in_title', 'in_checkin', 'in_ad', 'in_game', 'in_essence', 'in_topic', 'in_reply', 'in_other'];
         var OUT_ORDER = ['out_gacha', 'out_donate', 'out_other'];
         var incList = IN_ORDER.filter(function (k) { return inc[k]; }).map(function (k) { return inc[k]; });
         var expList = OUT_ORDER.filter(function (k) { return exp[k]; }).map(function (k) { return exp[k]; });
