@@ -4,12 +4,18 @@
 
 > 本仓库是**二开版**，底子来自论坛用户 **豆包本包** 的原版《LINUX.SB助手》。原作者的脚本地址与主页见下方[「原作者」](#原作者)一节，请先支持原作者。
 
-![积分标签页](screenshot-points-1.1.7.png)
-![合成标签页](screenshot-syn-1.1.7.png)
-![称号标签页](screenshot-titles-1.1.7.png)
-![打赏标签页](screenshot-lucky-1.1.7.png)
-![关于面板](screenshot-about-1.1.7.png)
-![收起后的入口按钮嵌在顶栏最后一格](screenshot-topbar-1.1.4.png)
+<table>
+<tr>
+<td align="center"><img src="screenshot-points-1.1.7.png" width="190" alt="积分标签页"><br><sub>积分</sub></td>
+<td align="center"><img src="screenshot-syn-1.1.7.png" width="190" alt="合成标签页"><br><sub>合成</sub></td>
+<td align="center"><img src="screenshot-titles-1.1.7.png" width="190" alt="称号标签页"><br><sub>称号</sub></td>
+<td align="center"><img src="screenshot-lucky-1.1.7.png" width="190" alt="打赏标签页"><br><sub>打赏</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="screenshot-about-1.1.7.png" width="190" alt="关于面板"><br><sub>关于</sub></td>
+<td align="center" colspan="3"><img src="screenshot-topbar-1.1.4.png" width="560" alt="入口按钮嵌在顶栏最后一格"><br><sub>入口按钮嵌在顶栏最后一格，点一下展开</sub></td>
+</tr>
+</table>
 
 *截图为面板 UI 演示，其中的数据为示例数据，不是真实账号流水。*
 
