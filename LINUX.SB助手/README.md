@@ -4,10 +4,11 @@
 
 > 本仓库是**二开版**，底子来自论坛用户 **豆包本包** 的原版《LINUX.SB助手》。原作者的脚本地址与主页见下方[「原作者」](#原作者)一节，请先支持原作者。
 
-![积分标签页](screenshot-points-1.1.0.png)
-![合成标签页](screenshot-syn-1.1.0.png)
-![称号标签页](screenshot-titles-1.1.0.png)
-![打赏标签页](screenshot-lucky-1.1.0.png)
+![积分标签页](screenshot-points-1.1.7.png)
+![合成标签页](screenshot-syn-1.1.7.png)
+![称号标签页](screenshot-titles-1.1.7.png)
+![打赏标签页](screenshot-lucky-1.1.7.png)
+![关于面板](screenshot-about-1.1.7.png)
 ![收起后的入口按钮嵌在顶栏最后一格](screenshot-topbar-1.1.4.png)
 
 *截图为面板 UI 演示，其中的数据为示例数据，不是真实账号流水。*
