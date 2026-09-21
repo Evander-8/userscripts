@@ -2669,8 +2669,10 @@
         '#linuxsb-combo .ldm-recent{margin-top:8px;padding:7px 9px 4px;border:1px solid var(--line,#eee);border-radius:8px;background:var(--bg,#f9fafb)}',
         '#linuxsb-combo .ldm-recent-list{max-height:132px;overflow-y:auto}',
         '#linuxsb-combo .ldm-recent-note{color:var(--text-subtle,#9ca3af);font-style:italic}',
-        '#linuxsb-combo .ldm-crit-badge{flex:0 0 auto;padding:0 5px;border:1px solid var(--success,rgba(22,163,74,.35));border-radius:999px;background:var(--success-soft,rgba(22,163,74,.1));color:var(--success,#16a34a);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}',
-        '#linuxsb-combo .ldm-crit-amt{flex:0 0 auto;padding:0 5px;border:1px solid var(--brand,rgba(37,99,235,.35));border-radius:999px;background:var(--brand-soft,rgba(37,99,235,.1));color:var(--brand,#2563eb);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}',
+        /* 倍率/积分两块小标：站点把 --success 和 --brand 都定义成了粉色，用站点变量会撞成一色，
+           所以这里写死色值（绿=倍率，蓝=积分），站点换色系也不跟着变 */
+        '#linuxsb-combo .ldm-crit-badge{flex:0 0 auto;padding:0 5px;border:1px solid #86efac;border-radius:999px;background:#f0fdf4;color:#15803d;font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}',
+        '#linuxsb-combo .ldm-crit-amt{flex:0 0 auto;padding:0 5px;border:1px solid #93c5fd;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}',
         '#linuxsb-combo .ldm-balance{margin-top:8px;padding:6px 9px;border-radius:6px;background:var(--bg,#f9fafb);color:var(--text-muted,#6b7280);font-size:12px;font-weight:600}',
         '#linuxsb-combo .ldm-balance.ldm-good{background:var(--success-soft,rgba(22,163,74,.08));color:var(--success,#16a34a)}',
         '#linuxsb-combo .ldm-balance.ldm-bad{background:var(--danger-soft,rgba(220,38,38,.08));color:var(--danger,#dc2626)}',
