@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.1.5
-// @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 幸运打赏今日统计（概率估算·回帖解锁·玩家列表·收支），TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
+// @version      1.1.6
+// @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 打赏暴击今日统计（中奖率估算·每日 10 次与 1000 分上限·玩家列表·收支），TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
 // @match        https://linux.sb/*
@@ -22,15 +22,14 @@
         maxPages: 40,        // 翻页安全上限
         maxTimeline: 200,    // 时间线最多显示的条数
         maxNames: 30,        // 合成所得里最多展示多少种称号
-        luckyCap: 10,        // 每日幸运奖励次数上限
-        highThreshold: 1000, // 累计获得幸运奖励积分达到该值后概率归 0
-        replyCap: 99999,     // 每日必须回帖 N 次才解锁打赏概率（新规则 20953：99999 次后解锁）
+        luckyCap: 10,        // 每日暴击抽奖次数上限（达到 10 次不再触发）
+        highThreshold: 1000, // 当日暴击累计积分达到该值后概率归 0（规则原文「超过 1000」）
         refreshMs: 10 * 60 * 1000, // 定时刷新间隔（仅在面板展开时执行；收起状态跳过）
         marketUrl: 'https://linux.sb/gacha_market?p=1', // 称号监控抓取页（最新发布）
         poolUrl: 'https://linux.sb/gacha',              // 全部称号列表（解析称号种类）
         monitorMs: 10 * 1000, // 称号监控轮询间隔（10 秒）
     };
-    var RULE_URL = 'https://linux.sb/topic/20953';
+    var RULE_URL = 'https://linux.sb/topic/16882'; // 打赏暴击（幸运奖励）规则公示帖
     var STORE_KEY = 'linuxsb-combo-v310';
     var MARKET_KEY = 'linuxsb-market-v309';   // 称号监控配置 + 状态（localStorage 持久化）
     var TAB_KEY = 'linuxsb-combo-tab-v309';   // 记住当前激活的 TAB（刷新后保持，不切回默认）
@@ -55,7 +54,7 @@
     var RULES = [
         { key: 'donate_out',   label: '打赏用户', re: /^给用户「.+?」的主题打赏$/ },
         { key: 'donate_in',    label: '被打赏',   re: /^用户「.+?」打赏了你的主题$/ },
-        { key: 'lucky',        label: '幸运奖励', re: /幸运(?:打赏)?奖励/ },
+        { key: 'lucky',        label: '打赏暴击', re: /幸运(?:打赏)?奖励/ },
         // 称号出售 / 回收要排在 gacha 前面：回收的文案「SSR 回收:称号系统」里也带「称号系统」
         { key: 'title_sell',   label: '称号出售', re: /出售称号|回收:称号系统/ },
         { key: 'gacha',        label: '抽奖',     re: /十连抽|百连抽|十抽|抽奖|称号系统/ },
@@ -414,60 +413,6 @@
             if (!b || a.reason !== b.reason || a.time !== b.time || a.delta !== b.delta) return false;
         }
         return true;
-    }
-
-    // 解析一页回帖列表，返回当页所有回帖的 Unix 秒时间戳
-    // 回帖页 DOM：li.post-item 内 <span data-performance-time="秒">相对时间</span>
-    function parseReplyTimes(html) {
-        var doc = new DOMParser().parseFromString(html, 'text/html');
-        var times = [];
-        doc.querySelectorAll('li.post-item [data-performance-time]').forEach(function (el) {
-            var ts = parseInt(el.getAttribute('data-performance-time'), 10);
-            if (!isNaN(ts) && ts > 0) times.push(ts);
-        });
-        return times;
-    }
-
-    // Unix 秒时间戳是否属于今天
-    function isTodayTs(ts) {
-        var d = new Date(ts * 1000);
-        if (isNaN(d.getTime())) return false;
-        var now = new Date();
-        return d.getFullYear() === now.getFullYear() &&
-            d.getMonth() === now.getMonth() &&
-            d.getDate() === now.getDate();
-    }
-
-    // 逐页抓取用户回帖列表，统计今日回帖数（倒序，遇到非今天立即停止）
-    function collectReplies(uid) {
-        return new Promise(function (resolve, reject) {
-            (async function () {
-                var count = 0;
-                var pages = 0;
-                outer:
-                for (var p = 1; p <= CONFIG.maxPages; p++) {
-                    var html;
-                    try {
-                        html = await getText('https://linux.sb/user/' + uid + '?tab=replies&p=' + p);
-                    } catch (e) {
-                        reject(new Error('回帖第 ' + p + ' 页请求失败：' + e.message));
-                        return;
-                    }
-                    var times = parseReplyTimes(html);
-                    if (!times.length) break;
-                    pages = p;
-                    var anyToday = false;
-                    for (var i = 0; i < times.length; i++) {
-                        if (!isTodayTs(times[i])) break outer; // 倒序：其后都是更早
-                        anyToday = true;
-                        count++;
-                    }
-                    if (!anyToday) break;
-                    if (p < CONFIG.maxPages) await delay(CONFIG.pageDelayMs);
-                }
-                resolve(count);
-            })();
-        });
     }
 
     /* ============ 称号合成：通知解析 ============ */
@@ -1356,7 +1301,7 @@
             '  <button type="button" class="combo-tab" data-tab="points" title="积分分析">📊 积分</button>' +
             '  <button type="button" class="combo-tab" data-tab="syn" title="称号合成统计">🧬 合成</button>' +
             '  <button type="button" class="combo-tab" data-tab="market" title="称号监控">📡 称号<span class="combo-tab-badge" data-tab-badge hidden></span></button>' +
-            '  <button type="button" class="combo-tab" data-tab="lucky" title="幸运打赏">🎁 打赏</button>' +
+            '  <button type="button" class="combo-tab" data-tab="lucky" title="打赏暴击（幸运奖励）">🎁 打赏</button>' +
             '</div>' +
             '<div class="combo-body">' +
             '  <div class="market-toast" data-market-toast></div>' +
@@ -1396,7 +1341,7 @@
             '      <span class="combo-time" data-pda-time></span>' +
             '    </div>' +
             '  </div>' +
-            /* ---- 幸运打赏面板 ---- */
+            /* ---- 打赏暴击面板 ---- */
             '  <div class="combo-pane" data-pane="lucky" hidden>' +
             '    <div class="combo-progress" data-ldm-progress hidden><span class="combo-progress-track"><span class="combo-progress-bar"></span></span><span class="combo-progress-text"></span></div>' +
             '    <div class="ldm-prob" data-ldm-prob>' +
@@ -1412,7 +1357,7 @@
             '      </div>' +
             '      <div class="ldm-card">' +
             '        <b class="ldm-num ldm-lucky" data-ldm-lucky>–</b>' +
-            '        <span class="ldm-cap">幸运奖励</span>' +
+            '        <span class="ldm-cap">今日暴击</span>' +
             '        <small class="ldm-sub" data-ldm-gained>–</small>' +
             '      </div>' +
             '    </div>' +
@@ -1500,7 +1445,7 @@
             '      <div class="combo-about-row"><span>二开作者</span><a href="https://linux.sb/user/13467" target="_blank" rel="noopener">Evanders</a></div>' +
             '      <div class="combo-about-row"><span>仓库</span><a href="https://github.com/Evander-8/userscripts" target="_blank" rel="noopener" title="https://github.com/Evander-8/userscripts">Evander-8/userscripts</a></div>' +
             '      <div class="combo-about-sec">这是什么</div>' +
-            '      <div class="combo-about-text">把积分流水、称号合成、称号市场行情、幸运打赏收进右上角一个浮窗，切标签页就看。</div>' +
+            '      <div class="combo-about-text">把积分流水、称号合成、称号市场行情、打赏暴击收进右上角一个浮窗，切标签页就看。</div>' +
             '      <div class="combo-about-sec">二开说明</div>' +
             '      <div class="combo-about-text">积分分析、合成统计、称号监控、幸运打赏的原始实现都来自原作者，二开版在此基础上做增量与界面调整。</div>' +
             '      <div class="combo-about-sec">数据与隐私</div>' +
@@ -1783,7 +1728,7 @@
         return cap;
     }
 
-    function renderLucky(stats, timeText, err, repliesToday) {
+    function renderLucky(stats, timeText, err) {
         if (!widget) return;
         var probEl = widget.querySelector('[data-ldm-prob]');
         var probNum = probEl.querySelector('.ldm-prob-num');
@@ -1809,22 +1754,15 @@
             balanceEl.className = 'ldm-balance ldm-err';
             playersBox.hidden = true;
         } else if (stats) {
-            var p = estimateProb(stats, repliesToday);
-            if (p.locked) {
-                // 锁定状态：显示「已下架」，概率置灰，锁下面小字显示回帖进度
-                probNum.textContent = '🔒 已下架';
-                probNote.textContent = p.note;
-                probEl.className = 'ldm-prob ldm-prob-locked';
-            } else {
-                probNum.textContent = (p.prob > 0 ? '约 ' : '') + p.prob + '%';
-                probNote.textContent = p.mult === '不触发' ? p.note : '倍率 ' + p.mult + ' · ' + p.note;
-                probEl.className = 'ldm-prob ldm-prob-' + p.tier;
-            }
+            var p = estimateProb(stats);
+            probNum.textContent = (p.prob > 0 ? '约 ' : '') + p.prob + '%';
+            probNote.textContent = p.mult === '不触发' ? p.note : '倍率 ' + p.mult + ' · ' + p.note;
+            probEl.className = 'ldm-prob ldm-prob-' + p.tier;
 
             tipsEl.textContent = stats.tips + ' 次';
             spentEl.textContent = '支出 ' + stats.spent + ' 分';
             luckyEl.textContent = stats.lucky + ' 次';
-            gainedEl.textContent = '奖励 ' + fmt(stats.luckyGained) + ' 分';
+            gainedEl.textContent = '暴击 ' + fmt(stats.luckyGained) + ' 分';
 
             if (stats.players && stats.players.length) {
                 var counts = {};
@@ -2229,27 +2167,26 @@
         var ldmBar = progressEl('[data-ldm-progress]');
         progressStart(pdaBar);
         progressStart(ldmBar);
-        // 并行抓取：积分明细 + 今日回帖数（1秒/页，两者独立翻页）
-        Promise.all([collectAll(uid, floor, function (page, total) {
+        // 抓积分明细（1秒/页）
+        collectAll(uid, floor, function (page, total) {
             progressPage(pdaBar, page, total);
             progressPage(ldmBar, page, total);
-        }, probe), collectReplies(uid)]).then(function (results) {
-            var repliesToday = results[1];
-            lastRecords = results[0].records;
+        }, probe).then(function (r) {
+            lastRecords = r.records;
             lastUid = uid;
             lastFloor = floor;
-            // 幸运打赏固定统计今日，不受筛选范围影响
+            // 打赏暴击固定统计今日，不受筛选范围影响
             var lucky = computeLucky(filterRecords(lastRecords, 'today'));
             var t = new Date();
             var tt = t.getHours() + ':' + String(t.getMinutes()).padStart(2, '0') + ':' + String(t.getSeconds()).padStart(2, '0');
             lastTimeText = tt;
-            renderLucky(lucky, tt, null, repliesToday);
+            renderLucky(lucky, tt, null);
             renderPoints(analyze(filterRecords(lastRecords, currentRange)), tt, null);
             progressDone(pdaBar, true);
             progressDone(ldmBar, true);
             try {
                 var today = new Date().toDateString();
-                localStorage.setItem(STORE_KEY, JSON.stringify({ day: today, records: lastRecords, repliesToday: repliesToday, floor: floor, savedAt: Date.now() }));
+                localStorage.setItem(STORE_KEY, JSON.stringify({ day: today, records: lastRecords, floor: floor, savedAt: Date.now() }));
             } catch (e) { /* 忽略 */ }
         }).catch(function (e) {
             lastRecords = null;
@@ -2330,7 +2267,7 @@
                 lastRecords = s.records;
                 // 旧缓存没记录 floor：它一定是按天抓的（近七天），否则当成全量会漏抓
                 lastFloor = (typeof s.floor === 'undefined' ? fetchFloor() : s.floor);
-                renderLucky(computeLucky(filterRecords(s.records, 'today')), '缓存', null, typeof s.repliesToday === 'number' ? s.repliesToday : 0);
+                renderLucky(computeLucky(filterRecords(s.records, 'today')), '缓存', null);
                 renderPoints(analyze(filterRecords(s.records, currentRange)), '缓存');
             }
         } catch (e) { /* 忽略 */ }
@@ -2364,7 +2301,7 @@
         hookDonateRefresh();
     }
 
-    /* ================= 幸运打赏计算 ================= */
+    /* ================= 打赏暴击计算 ================= */
 
     function computeLucky(records) {
         var stats = {
@@ -2390,23 +2327,18 @@
         return stats;
     }
 
-    function estimateProb(stats, repliesToday) {
-        // 回帖解锁：每日回帖不足 replyCap 次，概率锁定（置灰）；已对接 20953 新规则，回帖 99999 次才解锁
-        var rp = typeof repliesToday === 'number' ? repliesToday : 0;
-        if (rp < CONFIG.replyCap) {
-            return {
-                prob: 0, mult: '已下架', tier: 'locked',
-                locked: true, replies: rp, cap: CONFIG.replyCap,
-                note: '回帖 ' + rp + '/' + CONFIG.replyCap + ' 后解锁 · 已下架',
-            };
-        }
+    function estimateProb(stats) {
+        // 规则 16882：每日参与 10 次或当日暴击累计 1000 分后不再触发；同一个人只触发一次
         if (stats.lucky >= CONFIG.luckyCap) {
-            return { prob: 0, mult: '不触发', tier: 'over', note: '已达每日 ' + CONFIG.luckyCap + ' 次抽奖上限（' + stats.lucky + '/' + CONFIG.luckyCap + '）' };
+            return { prob: 0, mult: '不触发', tier: 'over', note: '已达每日 ' + CONFIG.luckyCap + ' 次上限（' + stats.lucky + '/' + CONFIG.luckyCap + '）' };
         }
         if (stats.luckyGained >= CONFIG.highThreshold) {
-            return { prob: 0, mult: '不触发', tier: 'over', note: '今日幸运奖励积分累计 ' + stats.luckyGained + ' ≥ ' + CONFIG.highThreshold + '，概率归 0' };
+            return { prob: 0, mult: '不触发', tier: 'over', note: '今日暴击积分累计 ' + stats.luckyGained + ' ≥ ' + CONFIG.highThreshold + '，概率归 0' };
         }
-        return { prob: 36, mult: '2-20', tier: 'low', note: '初始档 · 幸运奖励累计 ' + stats.luckyGained + '/' + CONFIG.highThreshold + ' 分 · 已打赏玩家 ' + (stats.distinctPlayers || 0) + ' 位' };
+        return {
+            prob: 36, mult: '2-20', tier: 'low',
+            note: '初始档 · 暴击累计 ' + stats.luckyGained + '/' + CONFIG.highThreshold + ' 分 · 今日打赏 ' + stats.tips + '/' + CONFIG.luckyCap + ' 次',
+        };
     }
 
     /* ================= 积分分析 ================= */
@@ -2422,7 +2354,7 @@
         }
         // 收入按「来源」分开记：不认识的才落到「其他收入」
         var IN_BUCKETS = {
-            lucky:      { key: 'in_lucky',   label: '幸运奖励' },
+            lucky:      { key: 'in_lucky',   label: '打赏暴击' },
             donate_in:  { key: 'in_donate',  label: '被打赏' },
             title_sell: { key: 'in_title',   label: '称号出售' },
             checkin:    { key: 'in_checkin', label: '每日签到' },
@@ -2567,17 +2499,13 @@
         /* 收起：面板整体隐身（入口按钮在顶栏上，或退成下方那个浮标） */
         '#linuxsb-combo.combo-folded{width:auto;max-height:none;border:0;border-radius:0;background:none;box-shadow:none}',
         '#linuxsb-combo.combo-folded .combo-head,#linuxsb-combo.combo-folded .combo-tabs,#linuxsb-combo.combo-folded .combo-body{display:none}',
-        /* ---- 幸运打赏 ---- */
+        /* ---- 打赏暴击 ---- */
         '#linuxsb-combo .ldm-prob{display:flex;flex-direction:column;gap:1px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--line,#e5e7eb);border-radius:8px;background:var(--brand-soft,rgba(37,99,235,.06))}',
         '#linuxsb-combo .ldm-prob-label{color:var(--text-muted,#6b7280);font-size:11px}',
         '#linuxsb-combo .ldm-prob-num{font-size:26px;font-weight:800;color:var(--brand,#2563eb);letter-spacing:.5px}',
         '#linuxsb-combo .ldm-prob-note{color:var(--text-subtle,#9ca3af);font-size:11px}',
         '#linuxsb-combo .ldm-prob.ldm-prob-over .ldm-prob-num{color:var(--danger,#dc2626)}',
         '#linuxsb-combo .ldm-prob.ldm-prob-over{background:var(--danger-soft,rgba(220,38,38,.07))}',
-        /* 回帖未解锁：整行置灰锁定 */
-        '#linuxsb-combo .ldm-prob.ldm-prob-locked{background:var(--bg,#f3f4f6);border-color:var(--line,#d1d5db);opacity:.75}',
-        '#linuxsb-combo .ldm-prob.ldm-prob-locked .ldm-prob-num{color:var(--text-subtle,#9ca3af);font-size:20px;letter-spacing:1px}',
-        '#linuxsb-combo .ldm-prob.ldm-prob-locked .ldm-prob-note{color:var(--text-muted,#6b7280);font-size:11px}',
         '#linuxsb-combo .ldm-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}',
         '#linuxsb-combo .ldm-card{display:grid;gap:1px;padding:7px 9px;border:1px solid var(--line,#eee);border-radius:8px;background:var(--bg,#f9fafb)}',
         '#linuxsb-combo .ldm-num{font-size:19px;font-weight:700;color:var(--text,#1f2329)}',
