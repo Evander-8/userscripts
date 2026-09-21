@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.1.6
-// @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 打赏暴击今日统计（中奖率估算·每日 10 次与 1000 分上限·玩家列表·收支），TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
+// @version      1.1.7
+// @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 打赏暴击今日统计（中奖率估算·每日 10 次与 1000 分上限·玩家列表·最近打赏结果逐笔配对实测倍率·收支），并在帖子列表/主题页把今日已打赏的作者名标成【已打赏】，TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
 // @match        https://linux.sb/*
@@ -24,13 +24,14 @@
         maxNames: 30,        // 合成所得里最多展示多少种称号
         luckyCap: 10,        // 每日暴击抽奖次数上限（达到 10 次不再触发）
         highThreshold: 1000, // 当日暴击累计积分达到该值后概率归 0（规则原文「超过 1000」）
+        recentTips: 10,      // 打赏面板「最近打赏结果」最多列几条
         refreshMs: 10 * 60 * 1000, // 定时刷新间隔（仅在面板展开时执行；收起状态跳过）
         marketUrl: 'https://linux.sb/gacha_market?p=1', // 称号监控抓取页（最新发布）
         poolUrl: 'https://linux.sb/gacha',              // 全部称号列表（解析称号种类）
         monitorMs: 10 * 1000, // 称号监控轮询间隔（10 秒）
     };
     var RULE_URL = 'https://linux.sb/topic/16882'; // 打赏暴击（幸运奖励）规则公示帖
-    var STORE_KEY = 'linuxsb-combo-v310';
+    var STORE_KEY = 'linuxsb-combo-v311';
     var MARKET_KEY = 'linuxsb-market-v309';   // 称号监控配置 + 状态（localStorage 持久化）
     var TAB_KEY = 'linuxsb-combo-tab-v309';   // 记住当前激活的 TAB（刷新后保持，不切回默认）
     var RANGE_KEY = 'linuxsb-combo-range-v310'; // 记住积分分析的筛选范围（今天/昨天/近七天）
@@ -209,8 +210,12 @@
     }
 
     // 某筛选范围需要的抓取下界；null 表示不设下界（「所有」＝一直抓到最后一页）
+    // 按范围自己的天数算：看「今日」就只抓到今天零点为止，不为了今天把近七天的页也拖下来
+    // （打赏面板只用今日数据，所以任何范围的下界都早于今天零点，它照样拿得到数据）
     function floorForRange(range) {
-        return range === 'all' ? null : fetchFloor();
+        if (range === 'all') return null;
+        var r = RANGES[range] || RANGES.today;
+        return dayStart(r.days).getTime();
     }
 
     // 手上的数据（heldFloor）是否已覆盖目标范围（needFloor）；null 代表无下界（全量）
@@ -229,10 +234,14 @@
             var bEl = li.querySelector('.points-rewards-change-value b');
             if (!reasonEl || !timeEl) return;
             var deltaRaw = bEl ? bEl.textContent.replace(/[+\s]/g, '') : '0';
+            // 每行都挂着所属主题的链接（打赏行与暴击行是同一个帖子），拿它当配对依据
+            var linkEl = li.querySelector('a[href*="/topic/"]');
+            var tm = linkEl ? String(linkEl.getAttribute('href') || '').match(/\/topic\/(\d+)/) : null;
             out.push({
                 reason: reasonEl.textContent.trim(),
                 time: timeEl.getAttribute('datetime') || '',
                 delta: parseInt(deltaRaw, 10) || 0,
+                topic: tm ? tm[1] : '',
             });
         });
         return out;
@@ -1361,6 +1370,10 @@
             '        <small class="ldm-sub" data-ldm-gained>–</small>' +
             '      </div>' +
             '    </div>' +
+            '    <div class="ldm-recent" data-ldm-recent hidden>' +
+            '      <span class="ldm-players-cap" data-ldm-recent-cap></span>' +
+            '      <div class="ldm-recent-list" data-ldm-recent-list></div>' +
+            '    </div>' +
             '    <div class="ldm-players" data-ldm-players hidden>' +
             '      <span class="ldm-players-cap" data-ldm-players-cap></span>' +
             '      <div class="ldm-players-list" data-ldm-players-list></div>' +
@@ -1741,6 +1754,9 @@
         var playersBox = widget.querySelector('[data-ldm-players]');
         var playersCap = widget.querySelector('[data-ldm-players-cap]');
         var playersList = widget.querySelector('[data-ldm-players-list]');
+        var recentBox = widget.querySelector('[data-ldm-recent]');
+        var recentCap = widget.querySelector('[data-ldm-recent-cap]');
+        var recentList = widget.querySelector('[data-ldm-recent-list]');
 
         if (err) {
             probNum.textContent = '–';
@@ -1753,10 +1769,11 @@
             balanceEl.textContent = err;
             balanceEl.className = 'ldm-balance ldm-err';
             playersBox.hidden = true;
+            recentBox.hidden = true;
         } else if (stats) {
             var p = estimateProb(stats);
             probNum.textContent = (p.prob > 0 ? '约 ' : '') + p.prob + '%';
-            probNote.textContent = p.mult === '不触发' ? p.note : '倍率 ' + p.mult + ' · ' + p.note;
+            probNote.textContent = p.note;
             probEl.className = 'ldm-prob ldm-prob-' + p.tier;
 
             tipsEl.textContent = stats.tips + ' 次';
@@ -1781,6 +1798,34 @@
                 playersBox.hidden = false;
             } else {
                 playersBox.hidden = true;
+            }
+
+            var recent = stats.recent || [];
+            if (recent.length) {
+                var hits = recent.filter(function (r) { return r.crit > 0; }).length;
+                recentCap.textContent = '最近打赏结果 · ' + recent.length + ' 条' +
+                    (hits > 0 ? '（暴击 ' + hits + ' 次）' : '');
+                recentList.innerHTML = recent.map(function (r) {
+                    if (r.unpaired) {
+                        return '<div class="pda-tl-row">' +
+                            '<span class="pda-tl-time">' + fmtTime(r.time) + '</span>' +
+                            '<span class="pda-tl-reason ldm-recent-note" title="这条暴击奖励的帖子链接对不上任何一笔打赏，没找到对应的打赏记录">未配对暴击</span>' +
+                            '<span class="ldm-crit-amt" title="实得积分">' + fmt(r.crit) + '</span>' +
+                            '</div>';
+                    }
+                    return '<div class="pda-tl-row">' +
+                        '<span class="pda-tl-time">' + fmtTime(r.time) + '</span>' +
+                        '<span class="pda-tl-reason" title="给用户「' + escapeHtml(r.player) + '」的主题打赏">' + escapeHtml(r.player) + '</span>' +
+                        '<span class="pda-tl-amt pda-tl-out">-' + r.spent + '</span>' +
+                        (r.crit > 0
+                            ? (r.mult > 0 ? '<span class="ldm-crit-badge" title="实测回报 ' + r.mult + ' 倍">暴击×' + r.mult + '</span>' : '') +
+                              '<span class="ldm-crit-amt" title="这笔暴击实得积分">' + fmt(r.crit) + '</span>'
+                            : '') +
+                        '</div>';
+                }).join('');
+                recentBox.hidden = false;
+            } else {
+                recentBox.hidden = true;
             }
 
             var net = stats.luckyGained - stats.spent;
@@ -2182,6 +2227,7 @@
             lastTimeText = tt;
             renderLucky(lucky, tt, null);
             renderPoints(analyze(filterRecords(lastRecords, currentRange)), tt, null);
+            setTippedAuthors(lastRecords);
             progressDone(pdaBar, true);
             progressDone(ldmBar, true);
             try {
@@ -2269,6 +2315,7 @@
                 lastFloor = (typeof s.floor === 'undefined' ? fetchFloor() : s.floor);
                 renderLucky(computeLucky(filterRecords(s.records, 'today')), '缓存', null);
                 renderPoints(analyze(filterRecords(s.records, currentRange)), '缓存');
+                setTippedAuthors(s.records);
             }
         } catch (e) { /* 忽略 */ }
 
@@ -2299,6 +2346,7 @@
 
         refreshData(uid, false); // 默认先加载一次
         hookDonateRefresh();
+        watchTippedBadges();
     }
 
     /* ================= 打赏暴击计算 ================= */
@@ -2324,19 +2372,116 @@
             }
         });
         stats.distinctPlayers = Object.keys(distinct).length;
+        stats.recent = buildTipResults(records);
         return stats;
+    }
+
+    // 逐笔打赏结果：每行流水都带着所属主题的链接，拿帖子 id 把暴击行配到触发它的那笔打赏上
+    // （同帖、最近、还没被认领的那笔），比「猜相邻」可靠。配不上的暴击单独成行，不静默丢弃。
+    function buildTipResults(records) {
+        var critOfTip = {};   // records 下标（打赏） -> 该笔暴击积分
+        var takenTip = {};    // records 下标（打赏） -> 已被某笔暴击认领
+        var claimed = {};     // records 下标（暴击） -> 已找到归属
+        records.forEach(function (it, j) {
+            if (!LUCKY_RE.test(it.reason) || !it.topic) return;
+            var best = -1, bestDist = Infinity;
+            records.forEach(function (tip, k) {
+                if (takenTip[k] || !TIP_RE.test(tip.reason)) return;
+                if (tip.topic !== it.topic) return;
+                var d = Math.abs(k - j);
+                if (d < bestDist) { bestDist = d; best = k; }
+            });
+            if (best >= 0) {
+                critOfTip[best] = Math.max(0, it.delta);
+                takenTip[best] = true;
+                claimed[j] = true;
+            }
+        });
+        var rows = [];
+        records.forEach(function (it, i) {
+            var tm = it.reason.match(TIP_RE);
+            if (tm) {
+                var crit = critOfTip[i] || 0;
+                rows.push({
+                    time: it.time, player: tm[1], spent: Math.abs(it.delta),
+                    crit: crit, mult: crit > 0 && it.delta ? Math.round(crit / Math.abs(it.delta)) : 0,
+                });
+            } else if (LUCKY_RE.test(it.reason) && !claimed[i]) {
+                rows.push({ time: it.time, player: '', spent: 0, crit: Math.max(0, it.delta), mult: 0, unpaired: true });
+            }
+        });
+        return rows.slice(0, CONFIG.recentTips);
+    }
+
+    /* ============ 站点页面上标记「今日已打赏」的作者 ============ */
+
+    // 今日打赏过的作者名（取自积分流水的打赏行，只算今天）；同一人一天只触发一次暴击，
+    // 所以在帖子列表 / 主题页把作者名标出来，省得重复点。
+    var tippedAuthors = {};
+
+    function extractTippedAuthors(records) {
+        var set = {};
+        (records || []).forEach(function (it) {
+            if (!inRange(it.time, 'today')) return;
+            var m = it.reason.match(TIP_RE);
+            if (m) set[m[1]] = true;
+        });
+        return set;
+    }
+
+    function applyTippedBadges() {
+        var names = Object.keys(tippedAuthors);
+        if (!names.length || !document.body) return;
+        var links = document.body.querySelectorAll('a[href*="/user/"]');
+        for (var i = 0; i < links.length; i++) {
+            var a = links[i];
+            if (a.closest('#linuxsb-combo')) continue;                       // 不标面板自己的链接
+            var name = (a.textContent || '').trim();                          // 空文本的是头像链接，跳过
+            if (!name || !tippedAuthors[name]) continue;
+            var next = a.nextElementSibling;
+            if (next && next.classList.contains('lsb-tipped-badge')) continue; // 已标过
+            var badge = document.createElement('span');
+            badge.className = 'lsb-tipped-badge';
+            badge.textContent = '【已打赏】';
+            badge.title = '今天已给「' + name + '」打赏过（同一人只触发一次暴击）';
+            a.insertAdjacentElement('afterend', badge);
+        }
+    }
+
+    var tippedTimer = null;
+    function scheduleTippedBadges() {
+        if (tippedTimer || document.hidden) return;
+        tippedTimer = setTimeout(function () {
+            tippedTimer = null;
+            if (document.hidden) return;
+            applyTippedBadges();
+        }, 150);
+    }
+
+    function setTippedAuthors(records) {
+        tippedAuthors = extractTippedAuthors(records);
+        applyTippedBadges();
+    }
+
+    // 主题列表是服务端渲染 + ajaxify 局部刷新 + 滚动加载，MutationObserver 兜住这些情况
+    function watchTippedBadges() {
+        if (!document.body) return;
+        new MutationObserver(function () {
+            if (Object.keys(tippedAuthors).length) scheduleTippedBadges();
+        }).observe(document.body, { childList: true, subtree: true });
     }
 
     function estimateProb(stats) {
         // 规则 16882：每日参与 10 次或当日暴击累计 1000 分后不再触发；同一个人只触发一次
+        // 规则原文写「倍率 2-20」，实测有 55 倍，故不展示规则倍率，改在逐笔结果里显示实测倍率
         if (stats.lucky >= CONFIG.luckyCap) {
-            return { prob: 0, mult: '不触发', tier: 'over', note: '已达每日 ' + CONFIG.luckyCap + ' 次上限（' + stats.lucky + '/' + CONFIG.luckyCap + '）' };
+            return { prob: 0, tier: 'over', note: '已达每日 ' + CONFIG.luckyCap + ' 次上限（' + stats.lucky + '/' + CONFIG.luckyCap + '）' };
         }
         if (stats.luckyGained >= CONFIG.highThreshold) {
-            return { prob: 0, mult: '不触发', tier: 'over', note: '今日暴击积分累计 ' + stats.luckyGained + ' ≥ ' + CONFIG.highThreshold + '，概率归 0' };
+            return { prob: 0, tier: 'over', note: '今日暴击积分累计 ' + stats.luckyGained + ' ≥ ' + CONFIG.highThreshold + '，概率归 0' };
         }
         return {
-            prob: 36, mult: '2-20', tier: 'low',
+            prob: 36, tier: 'low',
             note: '初始档 · 暴击累计 ' + stats.luckyGained + '/' + CONFIG.highThreshold + ' 分 · 今日打赏 ' + stats.tips + '/' + CONFIG.luckyCap + ' 次',
         };
     }
@@ -2521,6 +2666,11 @@
         '#linuxsb-combo .ldm-chip .ldm-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}',
         '#linuxsb-combo .ldm-chip .ldm-chip-count{flex:0 0 auto;font-style:normal}',
         '#linuxsb-combo .ldm-chip.ldm-chip-dup{border-color:var(--danger,rgba(220,38,38,.4));color:var(--danger,#dc2626);background:var(--danger-soft,rgba(220,38,38,.06))}',
+        '#linuxsb-combo .ldm-recent{margin-top:8px;padding:7px 9px 4px;border:1px solid var(--line,#eee);border-radius:8px;background:var(--bg,#f9fafb)}',
+        '#linuxsb-combo .ldm-recent-list{max-height:132px;overflow-y:auto}',
+        '#linuxsb-combo .ldm-recent-note{color:var(--text-subtle,#9ca3af);font-style:italic}',
+        '#linuxsb-combo .ldm-crit-badge{flex:0 0 auto;padding:0 5px;border:1px solid var(--success,rgba(22,163,74,.35));border-radius:999px;background:var(--success-soft,rgba(22,163,74,.1));color:var(--success,#16a34a);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}',
+        '#linuxsb-combo .ldm-crit-amt{flex:0 0 auto;padding:0 5px;border:1px solid var(--brand,rgba(37,99,235,.35));border-radius:999px;background:var(--brand-soft,rgba(37,99,235,.1));color:var(--brand,#2563eb);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}',
         '#linuxsb-combo .ldm-balance{margin-top:8px;padding:6px 9px;border-radius:6px;background:var(--bg,#f9fafb);color:var(--text-muted,#6b7280);font-size:12px;font-weight:600}',
         '#linuxsb-combo .ldm-balance.ldm-good{background:var(--success-soft,rgba(22,163,74,.08));color:var(--success,#16a34a)}',
         '#linuxsb-combo .ldm-balance.ldm-bad{background:var(--danger-soft,rgba(220,38,38,.08));color:var(--danger,#dc2626)}',
@@ -2625,6 +2775,9 @@
         '#linuxsb-combo .market-snap-meta{flex:0 0 auto;color:var(--text-muted,#6b7280);font-variant-numeric:tabular-nums;white-space:nowrap}',
         '#linuxsb-combo .market-snap-go{flex:0 0 auto;color:var(--brand,#2563eb);text-decoration:none;font-size:11px}',
         '#linuxsb-combo .market-snap-go:hover{text-decoration:underline}',
+
+        /* 站点页面上「今日已打赏」的作者标记（不在面板内，故不加 #linuxsb-combo 前缀） */
+        '.lsb-tipped-badge{display:inline-block;margin-left:4px;padding:0 4px;border-radius:3px;background:#e11d48;color:#fff;font-size:11px;font-weight:700;line-height:15px;vertical-align:middle;white-space:nowrap;letter-spacing:.5px;text-shadow:none}',
     ].join(''));
 
     if (document.readyState === 'loading') {
