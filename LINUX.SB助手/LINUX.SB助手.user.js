@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.1.7
-// @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 打赏暴击今日统计（中奖率估算·每日 10 次与 1000 分上限·玩家列表·最近打赏结果逐笔配对实测倍率·收支），并在帖子列表/主题页把今日已打赏的作者名标成【已打赏】，TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
+// @version      1.1.8
+// @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 打赏面板（站点已临时下架打赏暴击，面板内用灰色浮层盖住内容并提示已下架，恢复后改开关即还原），并在帖子列表/主题页把今日已打赏的作者名标成【已打赏】，TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
 // @match        https://linux.sb/*
@@ -25,6 +25,8 @@
         luckyCap: 10,        // 每日暴击抽奖次数上限（达到 10 次不再触发）
         highThreshold: 1000, // 当日暴击累计积分达到该值后概率归 0（规则原文「超过 1000」）
         recentTips: 10,      // 打赏面板「最近打赏结果」最多列几条
+        critOnline: false,   // 站点是否在线打赏暴击。临时下架期间置 false：打赏面板盖一层灰色浮层提示已下架；
+                             // 站点恢复后改回 true，浮层随之消失，其余逻辑原样可用
         refreshMs: 10 * 60 * 1000, // 定时刷新间隔（仅在面板展开时执行；收起状态跳过）
         marketUrl: 'https://linux.sb/gacha_market?p=1', // 称号监控抓取页（最新发布）
         poolUrl: 'https://linux.sb/gacha',              // 全部称号列表（解析称号种类）
@@ -1352,6 +1354,16 @@
             '  </div>' +
             /* ---- 打赏暴击面板 ---- */
             '  <div class="combo-pane" data-pane="lucky" hidden>' +
+            /* 暴击临时下架期间盖一层灰罩，后面那些区块照常渲染也不可见；
+               没有关闭入口，点灰罩也不会消失，只有把 CONFIG.critOnline 改回 true 才不再生成 */
+            (CONFIG.critOnline ? '' :
+            '    <div class="ldm-offline" role="alert">' +
+            '      <div class="ldm-offline-card">' +
+            '        <b class="ldm-offline-title">打赏暴击已下架</b>' +
+            '        <span class="ldm-offline-note">站点临时下架了打赏暴击（幸运奖励），这个面板先停用。</span>' +
+            '        <span class="ldm-offline-note">恢复后跟随后续脚本更新去掉这个提示。</span>' +
+            '      </div>' +
+            '    </div>') +
             '    <div class="combo-progress" data-ldm-progress hidden><span class="combo-progress-track"><span class="combo-progress-bar"></span></span><span class="combo-progress-text"></span></div>' +
             '    <div class="ldm-prob" data-ldm-prob>' +
             '      <span class="ldm-prob-label">下次打赏中奖率</span>' +
@@ -2645,6 +2657,12 @@
         '#linuxsb-combo.combo-folded{width:auto;max-height:none;border:0;border-radius:0;background:none;box-shadow:none}',
         '#linuxsb-combo.combo-folded .combo-head,#linuxsb-combo.combo-folded .combo-tabs,#linuxsb-combo.combo-folded .combo-body{display:none}',
         /* ---- 打赏暴击 ---- */
+        /* 下架浮层：盖住整个打赏面板。没有关闭入口，也不响应点击，只有改 CONFIG.critOnline 才消失 */
+        '#linuxsb-combo .combo-pane[data-pane="lucky"]{position:relative}',
+        '#linuxsb-combo .ldm-offline{position:absolute;inset:0;z-index:3;display:flex;justify-content:center;align-items:flex-start;padding:16px 10px;border-radius:8px;background:rgba(249,250,251,.86)}',
+        '#linuxsb-combo .ldm-offline-card{display:flex;flex-direction:column;gap:4px;width:100%;padding:11px 12px;border:1px solid #fcd34d;border-radius:8px;background:#fffbeb;text-align:center}',
+        '#linuxsb-combo .ldm-offline-title{color:#b45309;font-size:14px;font-weight:800;letter-spacing:.5px}',
+        '#linuxsb-combo .ldm-offline-note{color:#92400e;font-size:11px;line-height:1.55}',
         '#linuxsb-combo .ldm-prob{display:flex;flex-direction:column;gap:1px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--line,#e5e7eb);border-radius:8px;background:var(--brand-soft,rgba(37,99,235,.06))}',
         '#linuxsb-combo .ldm-prob-label{color:var(--text-muted,#6b7280);font-size:11px}',
         '#linuxsb-combo .ldm-prob-num{font-size:26px;font-weight:800;color:var(--brand,#2563eb);letter-spacing:.5px}',
