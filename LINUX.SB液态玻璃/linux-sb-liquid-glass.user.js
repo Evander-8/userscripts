@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX SB 液态玻璃质感 (Liquid Glassmorphism)
 // @namespace    https://linux.sb/
-// @version      1.7.3
-// @description  液态玻璃质感界面定制视觉脚本。v1.7.3：① 字体颜色自定义扩成浅色/深色两套：正文主文字、帖子与标题、链接与导航、次级元信息、按钮与胶囊 5 个区域各配浅色、深色两个取色器（共 10 组），切换站点昼夜模式时自动取对应那套，两套互不串味，修复深色模式下自定义色串味导致文字看不清的问题；② 深色模式默认值：正文/标题/链接为白字，次级元信息与按钮与浅色取同一色；③ 保留 v1.7.2 的编辑器工具栏修复、四个开关即时生效、默认参数调整与 v1.7.1 弹窗白底修复。
+// @version      1.7.4
+// @description  液态玻璃质感界面定制视觉脚本。v1.7.4：① 修复毛玻璃导致站点 fixed 浮层错位、被裁、看起来没弹出的问题——backdrop-filter 会使容器成为后代 position:fixed 的包含块，而站点（编辑器 .nb-editor-panel、全屏编辑器 .nb-editor-field.nb-editor-full、灯箱、弹窗遮罩等）靠 JS 按视口坐标定位；现将 .main-panel 与回复面板的模糊改由 ::before 伪层承载，观感不变但不再夺走包含块；② 保留 v1.7.3 的字体颜色浅色/深色两套自定义与深色模式默认值；③ 保留 v1.7.2 的编辑器工具栏修复、四个开关即时生效、默认参数调整。
 // @author       Antigravity
 // @license      MIT
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/597069
@@ -924,10 +924,12 @@
         }
 
         /* ===== 主容器与列表面板：拟态水滴卡片 ===== */
+        /* 注意：backdrop-filter 不写在这个元素上，改由下方 ::before 承载。
+           原因：backdrop-filter 会让元素成为后代 position:fixed 的包含块，
+           而站点靠 JS 按视口坐标定位 fixed 浮层（如编辑器 .nb-editor-panel），
+           一旦被夺走视口包含块就会整体错位、并被 overflow:hidden 裁掉。 */
         .main-panel {
             background: var(--lsb-glass-bg) !important;
-            backdrop-filter: blur(var(--lsb-blur)) saturate(170%) !important;
-            -webkit-backdrop-filter: blur(var(--lsb-blur)) saturate(170%) !important;
             border: 1px solid var(--lsb-glass-border) !important;
             border-radius: var(--lsb-radius) !important;
             box-shadow: var(--lsb-glass-tint), var(--lsb-glass-shine) !important;
@@ -936,6 +938,17 @@
             position: relative !important;
             padding: 16px 18px 20px !important;
             box-sizing: border-box !important;
+        }
+
+        .main-panel::before {
+            content: "" !important;
+            position: absolute !important;
+            inset: 0 !important;
+            border-radius: inherit !important;
+            backdrop-filter: blur(var(--lsb-blur)) saturate(170%) !important;
+            -webkit-backdrop-filter: blur(var(--lsb-blur)) saturate(170%) !important;
+            z-index: -1 !important;
+            pointer-events: none !important;
         }
 
         @media (max-width: 720px) {
@@ -1402,14 +1415,29 @@
         }
 
         /* 登录回复提示卡片 / 回复面板与编辑器 */
+        /* 同上：backdrop-filter 不能直接写在这两个容器上，否则会夺走编辑器
+           .nb-editor-panel（position:fixed + JS 视口坐标）的包含块。改由 ::before 承载。 */
         .replies-login-visible-card, .reply-panel, .quick-reply-slot .reply-panel, .reply-edit-panel {
             background: var(--lsb-glass-bg) !important;
-            backdrop-filter: blur(var(--lsb-blur)) saturate(160%) !important;
-            -webkit-backdrop-filter: blur(var(--lsb-blur)) saturate(160%) !important;
             border: 1px solid var(--lsb-glass-border) !important;
             border-radius: var(--lsb-radius) !important;
             box-shadow: var(--lsb-glass-tint), var(--lsb-glass-shine) !important;
             margin: 16px 0 !important;
+            position: relative !important;
+        }
+
+        .replies-login-visible-card::before,
+        .reply-panel::before,
+        .quick-reply-slot .reply-panel::before,
+        .reply-edit-panel::before {
+            content: "" !important;
+            position: absolute !important;
+            inset: 0 !important;
+            border-radius: inherit !important;
+            backdrop-filter: blur(var(--lsb-blur)) saturate(160%) !important;
+            -webkit-backdrop-filter: blur(var(--lsb-blur)) saturate(160%) !important;
+            z-index: -1 !important;
+            pointer-events: none !important;
         }
         .reply-panel textarea, .nb-editor-field textarea, .notify-form textarea, .settings-form textarea {
             background: var(--lsb-input-bg) !important;
