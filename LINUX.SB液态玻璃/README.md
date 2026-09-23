@@ -2,6 +2,12 @@
 
 为 [LINUX.SB (烧饼社区)](https://linux.sb/) 打造的现代液态玻璃化（Liquid Glassmorphism）视觉定制脚本。
 
+> **🌟 v1.7.5 更新**：**修复楼层操作按钮的图标消失（删除 / 置顶只剩空壳）！**
+> - **问题现象**：帖子楼层右下角那排操作按钮里，「删除」「置顶」只剩两个空的玻璃胶囊，图标不见了。
+> - **根因**：站点图标是用 `.icon-action::before` 的 14px 方块 + `mask: url(svg)` 画的，按钮本身是**定尺**的（`.icon-action { width: 24px }` 配 `.post-ops button.sb-limit-edit-time-delete { padding: 0 }`）。本脚本给 `.post-ops button` 强加了 `padding: 4px 14px`，内边距总量超过 24px 后，`box-sizing: border-box` 下内容盒被压到 **0 宽**，作为 flex 子项的伪元素随之塌成 **0px** —— 图标整条消失，只剩我们画的胶囊底。
+> - **修复**：`.post-ops` 的内边距改由站点掌控（脚本只负责上色、圆角与高光），定位/尺寸一律不碰；并追加 `.icon-action::before` 等图标伪元素禁止 `flex-shrink` 的兜底，防止同类问题再犯。
+> - **范围核对**：本地复现页实测，修复前 `.icon-delete / .icon-quote / .icon-edit` 的伪元素宽度均为 **0px**，修复后恢复 **14px × 14px**。
+>
 > **🌟 v1.7.4 更新**：**修复毛玻璃把站点 fixed 浮层“吃掉”的问题！**
 > - **问题现象**：点编辑器工具栏的表情按钮，弹层不出现 / 弹在错位置 / 被裁；全屏编辑器、灯箱、弹窗遮罩等 `position: fixed` 浮层同样受影响。
 > - **根因**：`backdrop-filter` 会让元素**成为后代 `position: fixed` 的包含块**。站点的 `.nb-editor-panel` 由 JS 用 `getBoundingClientRect()` 按**视口坐标**定位（官方注释即写明「面板用 fixed 浮层……位置由 JS 计算」），而 `.main-panel` 与回复面板上写的 `backdrop-filter` 把包含块夺走了——弹层于是相对面板而非视口定位，错位量恰等于该面板的视口位置（随滚动变化），再叠加 `overflow: hidden` 直接被裁掉。

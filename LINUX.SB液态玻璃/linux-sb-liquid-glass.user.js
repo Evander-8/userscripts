@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX SB 液态玻璃质感 (Liquid Glassmorphism)
 // @namespace    https://linux.sb/
-// @version      1.7.4
-// @description  液态玻璃质感界面定制视觉脚本。v1.7.4：① 修复毛玻璃导致站点 fixed 浮层错位、被裁、看起来没弹出的问题——backdrop-filter 会使容器成为后代 position:fixed 的包含块，而站点（编辑器 .nb-editor-panel、全屏编辑器 .nb-editor-field.nb-editor-full、灯箱、弹窗遮罩等）靠 JS 按视口坐标定位；现将 .main-panel 与回复面板的模糊改由 ::before 伪层承载，观感不变但不再夺走包含块；② 保留 v1.7.3 的字体颜色浅色/深色两套自定义与深色模式默认值；③ 保留 v1.7.2 的编辑器工具栏修复、四个开关即时生效、默认参数调整。
+// @version      1.7.5
+// @description  液态玻璃质感界面定制视觉脚本。v1.7.5：① 修复 .post-ops 楼层操作按钮的图标整条消失（删除/置顶只剩空壳）——站点图标由 .icon-action::before 的 14px 方块 + mask:url(svg) 绘制，而按钮是定尺的（.icon-action 宽 24px + padding:0）；脚本强加的 padding 4px 14px 让内容盒被压到 0 宽，作为 flex 子项的伪元素随之塌成 0px。现将 .post-ops 的内边距交回站点（脚本只负责上色、圆角与高光），并追加 .icon-action::before 禁止 flex 收缩的兜底；② 保留 v1.7.4 的 fixed 浮层包含块修复（毛玻璃改由 ::before 伪层承载）；③ 保留 v1.7.3 的字体颜色浅色/深色两套自定义与深色默认值；④ 保留 v1.7.2 的编辑器工具栏修复、四个开关即时生效、默认参数调整。
 // @author       Antigravity
 // @license      MIT
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/597069
@@ -1357,7 +1357,7 @@
             box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.95) !important;
         }
 
-        /* 楼层操作、“回到楼层”、以及展开折叠按钮 */
+        /* 楼层操作、”回到楼层”、以及展开折叠按钮 */
         .reply-pin-return-link, .post-ops .btn, .post-ops button, .long-content-fold-toggle, .long-content-fold-actions button {
             border-radius: 999px !important;
             background: var(--lsb-input-bg) !important;
@@ -1365,9 +1365,22 @@
             color: var(--text-muted) !important;
             box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.5) !important;
             transition: transform 0.2s var(--lsb-ease-spring), opacity 0.18s ease, background-color 0.18s ease, box-shadow 0.2s ease, border-color 0.18s ease !important;
-            padding: 4px 14px !important;
             font-size: 12px !important;
             text-decoration: none !important;
+        }
+        /* 内边距只给「回到楼层 / 展开折叠」，不碰 .post-ops：
+           .post-ops 里是站点定尺的图标按钮（.icon-action 宽 24px + padding:0），
+           图标由 ::before 的 14px + mask 绘制；一旦被强加内边距，内容盒会被压到 0 宽，
+           作为 flex 子项的 ::before 随之塌成 0px，图标整条消失（删除 / 置顶 只剩空壳）。
+           尺寸交给站点，脚本只负责上色。 */
+        .reply-pin-return-link, .long-content-fold-toggle, .long-content-fold-actions button {
+            padding: 4px 14px !important;
+        }
+        /* 站点图标（删除 / 回复 / 编辑等）是 ::before 的 14px + mask 画的，
+           作为 .icon-action 的 flex 子项默认 flex-shrink:1——容器内容盒一变窄就被压到 0 宽、图标消失。
+           这里禁止收缩，兜住同类回归。 */
+        .icon-action::before, .icon-quote::before, .icon-edit::before, .icon-delete::before {
+            flex: 0 0 auto !important;
         }
         .reply-pin-return-link:hover, .post-ops .btn:hover, .post-ops button:hover, .long-content-fold-toggle:hover, .long-content-fold-actions button:hover {
             background: rgba(255, 255, 255, 0.72) !important;
