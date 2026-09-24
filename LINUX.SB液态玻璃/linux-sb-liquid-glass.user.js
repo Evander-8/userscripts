@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX SB 液态玻璃质感 (Liquid Glassmorphism)
 // @namespace    https://linux.sb/
-// @version      1.8.0
-// @description  液态玻璃质感界面定制视觉脚本。v1.8.0 重磅升级：① 🔍 水滴透镜即时浮动预览（深度适配 Markdown 排版与代码块，透镜内自适应展开全文与纵向平滑滚动，方向锁定防瞬跳，全站头像与插图【💾 下载原图/头像】）；② 👑 楼主水光高亮与跨页只看楼主并发聚合加载；③ 🚀 全站帖子链接强制在新标签页（新窗口）秒开加载；④ 🎨 设置面板三段式分类导航重构（视觉背景/字体调色/功能特效分类切换）；⑤ 💎 分页容器方形白底消除与透明水滴胶囊美化。
+// @version      1.9.2
+// @description  液态玻璃质感界面定制视觉脚本。【v1.9.2 修复】：根治评论区回复 #1 楼及带空格用户名（如 @Dario Altman James #4）未树形嵌套的解析漏洞。【v1.9.1 小版本】：① 🎛️ 悬浮窗三开关独立分控；② 🚀 帖子新标签页打开独立开关。【v1.9.0 历史】：🌿 评论区树形展示、👑 原生楼主标识净化。
 // @author       Antigravity
 // @license      MIT
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/597069
@@ -33,8 +33,13 @@
         enableRefraction: true,      // 核心特色：SVG 液态曲面光线折射滤镜
         enableShimmer: true,         // 悬停动态扫光特效 (Shimmer Light Sweep)
         enableDockHeader: true,      // 胶囊悬浮式顶栏 (Floating Island Dock)
-        enableHoverPreview: true,    // 🔍 水滴透镜悬浮预览 (Hover Lens Preview)
+        enableTopicPreview: true,    // 📖 帖子内容悬浮预览 (Topic Hover Preview)
+        enableAvatarPreview: true,   // 👤 用户头像悬浮预览 (Avatar Hover Preview)
+        enableImagePreview: true,    // 🖼️ 帖子图片悬浮预览 (In-Post Image Hover Preview)
+        enableHoverPreview: true,    // 兼容历史字段：悬浮预览总开关
         enableOpHighlight: true,     // 👑 楼主高亮与只看楼主 (OP Highlighter & Filter)
+        enableCommentTree: true,     // 🌿 评论区树形展示 (Threaded Tree View Engine)
+        enableTopicNewTab: true,     // 🚀 帖子链接新窗口打开 (Open Topic in New Tab)
         textColorPrimary: '',        // 浅色模式：正文/主文本颜色（空表示用站点默认）
         textColorTitle: '',          // 浅色模式：帖子与标题颜色
         textColorLink: '',           // 浅色模式：链接与导航颜色
@@ -51,12 +56,27 @@
 
     function loadConfig() {
         try {
+            let loaded = null;
             if (typeof GM_getValue === 'function') {
                 const saved = GM_getValue(STORAGE_KEY);
-                if (saved) return Object.assign({}, DEFAULT_CONFIG, JSON.parse(saved));
+                if (saved) loaded = JSON.parse(saved);
             }
-            const localSaved = localStorage.getItem(STORAGE_KEY);
-            if (localSaved) return Object.assign({}, DEFAULT_CONFIG, JSON.parse(localSaved));
+            if (!loaded) {
+                const localSaved = localStorage.getItem(STORAGE_KEY);
+                if (localSaved) loaded = JSON.parse(localSaved);
+            }
+            if (loaded) {
+                // 向下兼容：若旧配置包含旧键 enableHoverPreview，且未独立设置开关，则继承历史值
+                if (loaded.enableHoverPreview !== undefined) {
+                    if (loaded.enableTopicPreview === undefined) loaded.enableTopicPreview = loaded.enableHoverPreview;
+                    if (loaded.enableAvatarPreview === undefined) loaded.enableAvatarPreview = loaded.enableHoverPreview;
+                    if (loaded.enableImagePreview === undefined) loaded.enableImagePreview = loaded.enableHoverPreview;
+                }
+                if (loaded.enableAvatarPreview !== undefined && loaded.enableImagePreview === undefined) {
+                    loaded.enableImagePreview = loaded.enableAvatarPreview;
+                }
+                return Object.assign({}, DEFAULT_CONFIG, loaded);
+            }
         } catch (e) {
             console.warn('[Liquid Glass] 加载配置失败，使用默认配置', e);
         }
@@ -65,6 +85,7 @@
 
     function saveConfig(cfg) {
         try {
+            cfg.enableHoverPreview = !!(cfg.enableTopicPreview || cfg.enableAvatarPreview || cfg.enableImagePreview);
             const str = JSON.stringify(cfg);
             if (typeof GM_setValue === 'function') {
                 GM_setValue(STORAGE_KEY, str);
@@ -2852,29 +2873,9 @@
         }
 
         /* ===== 功能6：楼主高亮与只看楼主 (OP Highlighter & Filter) ===== */
+        /* 杜绝重复：彻底隐藏自定义 .lsb-op-badge，防止遮挡头像或与网站原生楼主标识重复 */
         .lsb-op-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-            font-size: 11px;
-            font-weight: 700;
-            padding: 1px 7px;
-            border-radius: 999px;
-            background: linear-gradient(135deg, rgba(99, 102, 241, 0.22), rgba(236, 72, 153, 0.22));
-            border: 1px solid rgba(255, 255, 255, 0.65);
-            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15), inset 1px 1px 1.5px rgba(255, 255, 255, 0.8);
-            color: var(--text);
-            margin-left: 6px;
-            vertical-align: middle;
-            user-select: none;
-            letter-spacing: 0.5px;
-        }
-        html[data-dark-mode-theme="dark"] .lsb-op-badge,
-        html[data-color-scheme-dark-mode-theme="dark"] .lsb-op-badge {
-            background: linear-gradient(135deg, rgba(99, 102, 241, 0.35), rgba(236, 72, 153, 0.35));
-            border-color: rgba(255, 255, 255, 0.35);
-            color: #ffffff;
-            box-shadow: 0 2px 10px rgba(99, 102, 241, 0.3);
+            display: none !important;
         }
         .lsb-op-post {
             border-left: 3.5px solid #6366f1 !important;
@@ -2943,6 +2944,137 @@
             border-radius: 999px;
             box-shadow: var(--lsb-glass-shine);
             margin: 0 12px;
+        }
+
+        /* ==========================================
+           7. 评论区树形展示样式 (Threaded Tree View)
+           ========================================== */
+        .lsb-tree-view-active {
+            position: relative;
+        }
+
+        html body .lsb-tree-post,
+        html body .post-entry.lsb-tree-post,
+        html body .post-item.lsb-tree-post,
+        html body .topic-post-list > li.lsb-tree-post {
+            position: relative !important;
+            overflow: visible !important;
+            transition: margin-left 0.28s var(--lsb-ease-spring), width 0.28s var(--lsb-ease-spring), border-color 0.25s ease, box-shadow 0.25s ease !important;
+            box-sizing: border-box !important;
+        }
+
+        html body .post-entry.lsb-tree-depth-1, html body .post-item.lsb-tree-depth-1, html body .topic-post-list > li.lsb-tree-depth-1, html body .lsb-tree-depth-1 {
+            margin-left: 28px !important;
+            width: calc(100% - 28px) !important;
+        }
+        html body .post-entry.lsb-tree-depth-2, html body .post-item.lsb-tree-depth-2, html body .topic-post-list > li.lsb-tree-depth-2, html body .lsb-tree-depth-2 {
+            margin-left: 56px !important;
+            width: calc(100% - 56px) !important;
+        }
+        html body .post-entry.lsb-tree-depth-3, html body .post-item.lsb-tree-depth-3, html body .topic-post-list > li.lsb-tree-depth-3, html body .lsb-tree-depth-3 {
+            margin-left: 84px !important;
+            width: calc(100% - 84px) !important;
+        }
+        html body .post-entry.lsb-tree-depth-4, html body .post-item.lsb-tree-depth-4, html body .topic-post-list > li.lsb-tree-depth-4, html body .lsb-tree-depth-4 {
+            margin-left: 108px !important;
+            width: calc(100% - 108px) !important;
+        }
+        html body .post-entry.lsb-tree-depth-5, html body .post-item.lsb-tree-depth-5, html body .topic-post-list > li.lsb-tree-depth-5, html body .lsb-tree-depth-5 {
+            margin-left: 128px !important;
+            width: calc(100% - 128px) !important;
+        }
+
+        @media (max-width: 768px) {
+            html body .post-entry.lsb-tree-depth-1, html body .post-item.lsb-tree-depth-1, html body .lsb-tree-depth-1 { margin-left: 14px !important; width: calc(100% - 14px) !important; }
+            html body .post-entry.lsb-tree-depth-2, html body .post-item.lsb-tree-depth-2, html body .lsb-tree-depth-2 { margin-left: 28px !important; width: calc(100% - 28px) !important; }
+            html body .post-entry.lsb-tree-depth-3, html body .post-item.lsb-tree-depth-3, html body .lsb-tree-depth-3 { margin-left: 42px !important; width: calc(100% - 42px) !important; }
+            html body .post-entry.lsb-tree-depth-4, html body .post-item.lsb-tree-depth-4, html body .lsb-tree-depth-4 { margin-left: 54px !important; width: calc(100% - 54px) !important; }
+            html body .post-entry.lsb-tree-depth-5, html body .post-item.lsb-tree-depth-5, html body .lsb-tree-depth-5 { margin-left: 64px !important; width: calc(100% - 64px) !important; }
+        }
+
+        /* 树枝弯角引导线 (Liquid Branch Curve) */
+        html body .lsb-tree-post[data-lsb-tree-depth]:not([data-lsb-tree-depth="0"])::before {
+            content: "" !important;
+            position: absolute !important;
+            left: -18px !important;
+            top: 14px !important;
+            width: 14px !important;
+            height: 24px !important;
+            background: transparent !important;
+            opacity: 1 !important;
+            border-left: 2.5px solid rgba(99, 102, 241, 0.6) !important;
+            border-bottom: 2.5px solid rgba(99, 102, 241, 0.6) !important;
+            border-bottom-left-radius: 10px !important;
+            pointer-events: none !important;
+            z-index: 5 !important;
+            display: block !important;
+            transition: all 0.25s ease !important;
+        }
+        html body .lsb-tree-post[data-lsb-tree-depth]:not([data-lsb-tree-depth="0"]):hover::before {
+            border-color: rgba(168, 85, 247, 0.95) !important;
+            filter: drop-shadow(0 0 6px rgba(168, 85, 247, 0.7)) !important;
+        }
+
+        /* 子回复折叠/展开指示器胶囊 */
+        .lsb-tree-fold-btn {
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 4px !important;
+            padding: 2px 9px !important;
+            border-radius: 999px !important;
+            font-size: 11px !important;
+            font-weight: 600 !important;
+            background: var(--lsb-input-bg) !important;
+            border: 1px solid var(--lsb-glass-border-light) !important;
+            color: var(--text-muted) !important;
+            cursor: pointer !important;
+            user-select: none !important;
+            transition: all 0.2s var(--lsb-ease-spring) !important;
+            margin-left: 8px !important;
+            vertical-align: middle !important;
+            line-height: 1.4 !important;
+        }
+        .lsb-tree-fold-btn:hover {
+            background: rgba(99, 102, 241, 0.15) !important;
+            color: var(--text) !important;
+            border-color: rgba(99, 102, 241, 0.5) !important;
+            transform: translateY(-1px) scale(1.02) !important;
+        }
+        .lsb-tree-fold-btn.folded {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.3)) !important;
+            color: #6366f1 !important;
+            border-color: rgba(99, 102, 241, 0.6) !important;
+        }
+
+        /* 被折叠隐藏的后代节点 */
+        .lsb-tree-post.lsb-tree-hidden {
+            display: none !important;
+        }
+
+        /* 父级线索指示胶囊 */
+        .lsb-tree-reply-to-pill {
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 3px !important;
+            padding: 1px 8px !important;
+            border-radius: 999px !important;
+            font-size: 11px !important;
+            font-weight: 500 !important;
+            color: var(--text-muted) !important;
+            background: rgba(125, 125, 125, 0.08) !important;
+            border: 1px solid var(--lsb-glass-border-light) !important;
+            margin-right: 6px !important;
+            text-decoration: none !important;
+            cursor: pointer !important;
+            transition: all 0.2s ease !important;
+            user-select: none !important;
+            vertical-align: middle !important;
+        }
+        .lsb-tree-reply-to-pill:hover {
+            color: #6366f1 !important;
+            background: rgba(99, 102, 241, 0.12) !important;
+            border-color: rgba(99, 102, 241, 0.4) !important;
+            transform: translateY(-1px) !important;
         }
 
         /* 设置面板分类导航选项卡与独立子页面 */
@@ -3391,6 +3523,29 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+        }
+        .lsb-switch-row .lsb-setting-label {
+            flex: 1;
+            margin-right: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+        .lsb-switch-row .lsb-setting-label > div:first-child {
+            white-space: nowrap;
+            flex-shrink: 0;
+            font-size: 13px;
+        }
+        .lsb-switch-row .lsb-setting-hint {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: right;
+            font-size: 11px;
+            opacity: 0.85;
+            flex-shrink: 1;
         }
         .lsb-switch {
             position: relative;
@@ -3882,26 +4037,74 @@
                     </label>
                 </div>
 
-                <!-- 水滴透镜即时浮动预览 -->
-                <div class="lsb-setting-row lsb-switch-row">
+                <!-- 帖子内容悬浮预览 -->
+                <div class="lsb-setting-row lsb-switch-row" title="鼠标悬停帖子标题或楼层引用时，即时浮动预览首楼内容与富文本">
                     <div class="lsb-setting-label" style="margin-bottom:0;">
-                        <div>🔍 水滴透镜悬浮预览</div>
-                        <div class="lsb-setting-hint">悬停标题/图片/楼层即时微透镜预览</div>
+                        <div>📖 帖子悬浮预览</div>
+                        <div class="lsb-setting-hint">悬停标题即时预览</div>
                     </div>
                     <label class="lsb-switch">
-                        <input type="checkbox" id="lsb-preview-switch" ${config.enableHoverPreview ? 'checked' : ''}>
+                        <input type="checkbox" id="lsb-topic-preview-switch" ${config.enableTopicPreview ? 'checked' : ''}>
+                        <span class="lsb-switch-slider"></span>
+                    </label>
+                </div>
+
+                <!-- 用户头像悬浮预览 -->
+                <div class="lsb-setting-row lsb-switch-row" title="鼠标悬停全站头像时，浮动展示高清大图并支持一键下载头像">
+                    <div class="lsb-setting-label" style="margin-bottom:0;">
+                        <div>👤 头像悬浮预览</div>
+                        <div class="lsb-setting-hint">悬停查看原图下载</div>
+                    </div>
+                    <label class="lsb-switch">
+                        <input type="checkbox" id="lsb-avatar-preview-switch" ${config.enableAvatarPreview ? 'checked' : ''}>
+                        <span class="lsb-switch-slider"></span>
+                    </label>
+                </div>
+
+                <!-- 帖子图片悬浮预览 -->
+                <div class="lsb-setting-row lsb-switch-row" title="鼠标悬停帖子正文插图与相册时，浮动放大展示并支持一键下载原图">
+                    <div class="lsb-setting-label" style="margin-bottom:0;">
+                        <div>🖼️ 图片悬浮预览</div>
+                        <div class="lsb-setting-hint">正文配图放大下载</div>
+                    </div>
+                    <label class="lsb-switch">
+                        <input type="checkbox" id="lsb-image-preview-switch" ${config.enableImagePreview ? 'checked' : ''}>
                         <span class="lsb-switch-slider"></span>
                     </label>
                 </div>
 
                 <!-- 楼主高光水波与只看楼主 -->
-                <div class="lsb-setting-row lsb-switch-row">
+                <div class="lsb-setting-row lsb-switch-row" title="长帖自动识别 OP 专属光晕与跨页聚合只看楼主">
                     <div class="lsb-setting-label" style="margin-bottom:0;">
-                        <div>👑 楼主高亮与只看楼主</div>
-                        <div class="lsb-setting-hint">长帖自动识别 OP 专属光晕与一键筛选</div>
+                        <div>👑 楼主高亮筛选</div>
+                        <div class="lsb-setting-hint">OP专属光晕与筛选</div>
                     </div>
                     <label class="lsb-switch">
                         <input type="checkbox" id="lsb-op-switch" ${config.enableOpHighlight ? 'checked' : ''}>
+                        <span class="lsb-switch-slider"></span>
+                    </label>
+                </div>
+
+                <!-- 评论区树形展示 -->
+                <div class="lsb-setting-row lsb-switch-row" title="长帖评论区按回复引用关系呈现树状层级连线与折叠">
+                    <div class="lsb-setting-label" style="margin-bottom:0;">
+                        <div>🌿 评论树形展示</div>
+                        <div class="lsb-setting-hint">树状层级导轨与折叠</div>
+                    </div>
+                    <label class="lsb-switch">
+                        <input type="checkbox" id="lsb-tree-switch" ${config.enableCommentTree ? 'checked' : ''}>
+                        <span class="lsb-switch-slider"></span>
+                    </label>
+                </div>
+
+                <!-- 帖子链接新窗口打开 -->
+                <div class="lsb-setting-row lsb-switch-row" title="点击帖子列表、今日热榜或侧边栏帖子链接时，在新标签页打开加载">
+                    <div class="lsb-setting-label" style="margin-bottom:0;">
+                        <div>🚀 帖子新标签页</div>
+                        <div class="lsb-setting-hint">点击帖子新窗口打开</div>
+                    </div>
+                    <label class="lsb-switch">
+                        <input type="checkbox" id="lsb-topic-newtab-switch" ${config.enableTopicNewTab ? 'checked' : ''}>
                         <span class="lsb-switch-slider"></span>
                     </label>
                 </div>
@@ -4317,14 +4520,45 @@
             applyStyles();
         });
 
-        // 水滴透镜悬浮预览开关
-        const previewSwitch = document.getElementById('lsb-preview-switch');
-        if (previewSwitch) {
-            previewSwitch.addEventListener('change', () => {
-                config.enableHoverPreview = previewSwitch.checked;
+        // 帖子内容悬浮预览独立开关
+        const topicPreviewSwitch = document.getElementById('lsb-topic-preview-switch');
+        if (topicPreviewSwitch) {
+            topicPreviewSwitch.addEventListener('change', () => {
+                config.enableTopicPreview = topicPreviewSwitch.checked;
+                config.enableHoverPreview = !!(config.enableTopicPreview || config.enableAvatarPreview || config.enableImagePreview);
                 saveConfig(config);
                 const lens = document.getElementById('lsb-hover-preview-lens');
-                if (!config.enableHoverPreview && lens) {
+                if (!config.enableTopicPreview && lens && lens.querySelector('.lsb-lens-topic-wrap')) {
+                    lens.classList.remove('lsb-lens-visible');
+                    lens.style.display = 'none';
+                }
+            });
+        }
+
+        // 用户头像悬浮预览独立开关
+        const avatarPreviewSwitch = document.getElementById('lsb-avatar-preview-switch');
+        if (avatarPreviewSwitch) {
+            avatarPreviewSwitch.addEventListener('change', () => {
+                config.enableAvatarPreview = avatarPreviewSwitch.checked;
+                config.enableHoverPreview = !!(config.enableTopicPreview || config.enableAvatarPreview || config.enableImagePreview);
+                saveConfig(config);
+                const lens = document.getElementById('lsb-hover-preview-lens');
+                if (!config.enableAvatarPreview && lens && lens.querySelector('.lsb-lens-media-wrap.is-avatar')) {
+                    lens.classList.remove('lsb-lens-visible');
+                    lens.style.display = 'none';
+                }
+            });
+        }
+
+        // 帖子图片悬浮预览独立开关
+        const imagePreviewSwitch = document.getElementById('lsb-image-preview-switch');
+        if (imagePreviewSwitch) {
+            imagePreviewSwitch.addEventListener('change', () => {
+                config.enableImagePreview = imagePreviewSwitch.checked;
+                config.enableHoverPreview = !!(config.enableTopicPreview || config.enableAvatarPreview || config.enableImagePreview);
+                saveConfig(config);
+                const lens = document.getElementById('lsb-hover-preview-lens');
+                if (!config.enableImagePreview && lens && lens.querySelector('.lsb-lens-media-wrap:not(.is-avatar)')) {
                     lens.classList.remove('lsb-lens-visible');
                     lens.style.display = 'none';
                 }
@@ -4339,6 +4573,30 @@
                 saveConfig(config);
                 if (typeof window.__lsbRunOpHighlight === 'function') {
                     window.__lsbRunOpHighlight();
+                }
+            });
+        }
+
+        // 评论区树形展示开关
+        const treeSwitch = document.getElementById('lsb-tree-switch');
+        if (treeSwitch) {
+            treeSwitch.addEventListener('change', () => {
+                config.enableCommentTree = treeSwitch.checked;
+                saveConfig(config);
+                if (typeof window.__lsbRunCommentTree === 'function') {
+                    window.__lsbRunCommentTree();
+                }
+            });
+        }
+
+        // 帖子链接新窗口打开开关
+        const topicNewTabSwitch = document.getElementById('lsb-topic-newtab-switch');
+        if (topicNewTabSwitch) {
+            topicNewTabSwitch.addEventListener('change', () => {
+                config.enableTopicNewTab = topicNewTabSwitch.checked;
+                saveConfig(config);
+                if (typeof window.__lsbRunTopicNewTab === 'function') {
+                    window.__lsbRunTopicNewTab();
                 }
             });
         }
@@ -4607,7 +4865,7 @@
 
             const actionText = isAvatar ? '下载头像' : '下载原图';
             lens.innerHTML = `
-                <div class="lsb-lens-media-wrap">
+                <div class="lsb-lens-media-wrap ${isAvatar ? 'is-avatar' : 'is-post-image'}">
                     <img class="lsb-lens-img" src="${imgSrc}" alt="预览" />
                     <div class="lsb-lens-footer">
                         <button type="button" class="lsb-lens-download-btn" id="lsb-lens-download-btn" title="点击下载原图">
@@ -4723,7 +4981,7 @@
         }
 
         document.addEventListener('mouseover', (e) => {
-            if (!config.enableHoverPreview) return;
+            if (!config.enableTopicPreview && !config.enableAvatarPreview && !config.enableImagePreview) return;
             const target = e.target;
             if (!target) return;
 
@@ -4742,12 +5000,16 @@
             // 1. 图片与头像预览目标 (排除 emoji 图标，支持全站楼层、个人卡片与列表头像)
             const imgEl = target.closest('.post-content img:not(.emoji), .nb-editor-post-content img:not(.emoji), img.avatar-img, img.avatar, .avatar img, .avatar-profile-link img, .post-avatar img, [component="user/avatar"] img, .profile-avatar img, a[href*="/user/"] img, a.image-lightbox, .attachment-upload-preview-box img');
             if (imgEl && imgEl.tagName === 'IMG') {
+                const isAvatar = !!(
+                    imgEl.matches('.avatar-img, .avatar, [class*="avatar"], img[src*="avatar"]') ||
+                    imgEl.closest('.avatar-profile-link, .avatar, [class*="avatar"], a[href*="/user/"], [component="user/avatar"]')
+                );
+
+                if (isAvatar && !config.enableAvatarPreview) return;
+                if (!isAvatar && !config.enableImagePreview) return;
+
                 const src = imgEl.currentSrc || imgEl.src;
                 if (src && !src.includes('data:image/svg')) {
-                    const isAvatar = !!(
-                        imgEl.matches('.avatar-img, .avatar, [class*="avatar"], img[src*="avatar"]') ||
-                        imgEl.closest('.avatar-profile-link, .avatar, [class*="avatar"], a[href*="/user/"], [component="user/avatar"]')
-                    );
                     clearTimeout(hideTimer);
                     clearTimeout(hoverTimer);
                     currentTarget = imgEl;
@@ -4761,6 +5023,7 @@
             // 2. 楼层内引用/回到楼层
             const quoteLink = target.closest('.reply-pin-return-link, a[href*="#post-"], .quote-threads-child a');
             if (quoteLink) {
+                if (!config.enableTopicPreview) return;
                 const href = quoteLink.getAttribute('href') || '';
                 const hash = href.includes('#') ? href.split('#')[1] : '';
                 if (hash) {
@@ -4793,6 +5056,7 @@
             // 3. 帖子列表标题预览
             const topicLink = target.closest('.topic-title a, .topic-title, .post-item a[href*="/topic/"], .post-item a[href*="/t/"]');
             if (topicLink) {
+                if (!config.enableTopicPreview) return;
                 const href = topicLink.getAttribute('href');
                 if (href && !href.startsWith('javascript:') && !href.startsWith('#')) {
                     const fullUrl = new URL(href, window.location.origin).href;
@@ -4916,31 +5180,35 @@
         const opUsername = window.__lsbCurrentOp ? window.__lsbCurrentOp.username : '';
         if (!opUsername && !opHref) return;
 
-        // 1. 遍历当前页所有原始楼层，标记楼主与挂载 👑 楼主 水晶微胶囊徽章
+        // 1. 遍历当前页所有原始楼层，标记楼主状态（完全不注入重复标识，杜绝遮盖头像与重复）
         posts.forEach((post) => {
             const authorEl = post.querySelector('.avatar-profile-link, a[href*="/user/"], [component="post/author"]');
-            if (!authorEl) return;
-            const href = authorEl.getAttribute('href') || '';
-            const uname = authorEl.textContent.trim();
-            const isOp = (opHref && href === opHref) || (opUsername && uname === opUsername);
+            let isOp = false;
+
+            // 优先检查站点原生自带的「楼主」标识
+            const hasNativeOpBadge = Array.from(post.querySelectorAll('span, a, div, label, font, strong')).some(el => {
+                return el.children.length === 0 && el.textContent.trim() === '楼主';
+            });
+
+            if (hasNativeOpBadge) {
+                isOp = true;
+            } else if (authorEl) {
+                const href = authorEl.getAttribute('href') || '';
+                const uname = authorEl.textContent.trim();
+                isOp = (opHref && href === opHref) || (opUsername && uname === opUsername);
+            }
 
             post.dataset.lsbIsOp = isOp ? '1' : '0';
 
             if (isOp) {
                 post.classList.add('lsb-op-post');
-                if (!post.querySelector('.lsb-op-badge')) {
-                    const badge = document.createElement('span');
-                    badge.className = 'lsb-op-badge';
-                    badge.innerHTML = `👑 楼主`;
-                    badge.title = '主题作者 (Original Poster)';
-                    authorEl.insertAdjacentElement('afterend', badge);
-                }
             } else {
                 post.classList.remove('lsb-op-post');
-                const existingBadge = post.querySelector('.lsb-op-badge');
-                if (existingBadge) existingBadge.remove();
             }
         });
+
+        // 彻底清除历史残留的 .lsb-op-badge 元素，杜绝遮挡头像
+        document.querySelectorAll('.lsb-op-badge').forEach(b => b.remove());
 
         // 辅助：获取本帖其它所有分页 URL
         function getOtherPageUrls() {
@@ -5113,15 +5381,7 @@
                                 clone.classList.add('lsb-op-post', 'lsb-op-fetched-post');
                                 clone.dataset.lsbIsOp = '1';
                                 clone.style.display = '';
-
-                                const aEl = clone.querySelector('.avatar-profile-link, a[href*="/user/"], [component="post/author"]');
-                                if (aEl && !clone.querySelector('.lsb-op-badge')) {
-                                    const badge = document.createElement('span');
-                                    badge.className = 'lsb-op-badge';
-                                    badge.innerHTML = `👑 楼主`;
-                                    badge.title = '主题作者 (Original Poster)';
-                                    aEl.insertAdjacentElement('afterend', badge);
-                                }
+                                clone.querySelectorAll('.lsb-op-badge').forEach(b => b.remove());
                                 aggregatedNodes.push(clone);
                                 totalAggregatedCount++;
                             });
@@ -5179,6 +5439,561 @@
         }
     }
     window.__lsbRunOpHighlight = initOpHighlightEngine;
+
+    // ==========================================
+    // 8. 功能8：评论区树形展示引擎 (Threaded Tree View Engine)
+    // ==========================================
+    function countAllDescendants(node) {
+        let count = 0;
+        if (!node.children) return 0;
+        count += node.children.length;
+        node.children.forEach(c => {
+            count += countAllDescendants(c);
+        });
+        return count;
+    }
+
+    function setDescendantsVisibility(node, visible) {
+        if (!node.children) return;
+        node.children.forEach(c => {
+            if (c.el) {
+                if (visible) {
+                    c.el.classList.remove('lsb-tree-hidden');
+                    const childFoldBtn = c.el.querySelector('.lsb-tree-fold-btn');
+                    const childIsFolded = childFoldBtn && childFoldBtn.classList.contains('folded');
+                    if (!childIsFolded) {
+                        setDescendantsVisibility(c, true);
+                    }
+                } else {
+                    c.el.classList.add('lsb-tree-hidden');
+                    setDescendantsVisibility(c, false);
+                }
+            }
+        });
+    }
+
+    function revertToFlatView(posts, listContainer) {
+        if (!listContainer) return;
+        listContainer.classList.remove('lsb-tree-view-active');
+
+        const sorted = posts.slice().sort((a, b) => {
+            const idxA = parseInt(a.dataset.lsbOriginalIndex || '0', 10);
+            const idxB = parseInt(b.dataset.lsbOriginalIndex || '0', 10);
+            return idxA - idxB;
+        });
+
+        sorted.forEach(p => {
+            p.classList.remove('lsb-tree-post', 'lsb-tree-depth-1', 'lsb-tree-depth-2', 'lsb-tree-depth-3', 'lsb-tree-depth-4', 'lsb-tree-depth-5', 'lsb-tree-hidden');
+            delete p.dataset.lsbTreeDepth;
+
+            const pill = p.querySelector('.lsb-tree-reply-to-pill');
+            if (pill) pill.remove();
+
+            const foldBtn = p.querySelector('.lsb-tree-fold-btn');
+            if (foldBtn) foldBtn.remove();
+
+            listContainer.appendChild(p);
+        });
+    }
+
+    function getTopicPosts() {
+        let posts = Array.from(document.querySelectorAll('.post-entry, .post-item, .topic-post-list > li, [component="post"]'));
+        if (posts.length === 0) {
+            const contents = Array.from(document.querySelectorAll('.post-content, .post-text, .nb-editor-post-content'));
+            const found = new Set();
+            contents.forEach(c => {
+                const card = c.closest('.post-entry, .post-item, [component="post"], li, article') || c.parentElement;
+                if (card && !found.has(card) && card !== document.body) found.add(card);
+            });
+            posts = Array.from(found);
+        }
+        return posts.filter(p => !p.classList.contains('lsb-op-fetched-divider'));
+    }
+
+    function extractFloorNumber(post, defaultIndex) {
+        if (!post) return defaultIndex + 1;
+        if (post.dataset.floor) {
+            const f = parseInt(post.dataset.floor, 10);
+            if (!isNaN(f) && f > 0) return f;
+        }
+        if (post.dataset.index) {
+            const f = parseInt(post.dataset.index, 10);
+            if (!isNaN(f) && f > 0) return f;
+        }
+        if (post.dataset.postIndex) {
+            const f = parseInt(post.dataset.postIndex, 10);
+            if (!isNaN(f) && f > 0) return f;
+        }
+
+        // 1. 优先从卡片右侧操作栏 .post-ops 或专属楼层标签中提取（绝不会混淆左侧的回复引用）
+        const opsEls = post.querySelectorAll('.post-ops, .post-actions, .post-tools, .post-number, .floor-number, .floor, [component="post/index"]');
+        for (const el of opsEls) {
+            if (el.closest('.post-meta, .reply-to, .parent-post, .quote-threads-child, .lsb-tree-reply-to-pill')) continue;
+            const text = (el.textContent || '').trim();
+            const matches = Array.from(text.matchAll(/#(\d+)\b/g));
+            if (matches.length > 0) {
+                // 取最后一个匹配项（卡片最右侧通常为楼层号）
+                const last = matches[matches.length - 1];
+                const f = parseInt(last[1], 10);
+                if (!isNaN(f) && f > 0) return f;
+            }
+        }
+
+        // 2. 检查头部其它独立 #数字 元素（严格排除 .post-meta 与各类回复/引用上下文）
+        const spans = post.querySelectorAll('.post-header a, .post-header span, .post-ops a, .post-ops span');
+        for (const el of spans) {
+            if (el.closest('.post-content, .post-text, .nb-editor-post-content, .post-meta, .reply-to, .parent-post, .quote-threads-child, .lsb-tree-reply-to-pill')) continue;
+            const txt = (el.textContent || '').trim();
+            const m = txt.match(/^#(\d+)$/);
+            if (m) {
+                const prev = el.previousElementSibling || el.parentElement;
+                const prevText = prev ? (prev.textContent || '') : '';
+                if (!/回复|↳|对/i.test(prevText)) {
+                    const f = parseInt(m[1], 10);
+                    if (!isNaN(f) && f > 0) return f;
+                }
+            }
+        }
+
+        if (post.id) {
+            const m = post.id.match(/(?:post-|floor-)(\d+)/);
+            if (m) {
+                const f = parseInt(m[1], 10);
+                if (!isNaN(f) && f > 0) return f;
+            }
+        }
+
+        return defaultIndex + 1;
+    }
+
+    function extractParentFloorNumber(post, currentFloor) {
+        if (!post) return null;
+
+        if (post.dataset.toFloor) {
+            const f = parseInt(post.dataset.toFloor, 10);
+            if (!isNaN(f) && (!currentFloor || f < currentFloor)) return f;
+        }
+        if (post.getAttribute('data-to-floor')) {
+            const f = parseInt(post.getAttribute('data-to-floor'), 10);
+            if (!isNaN(f) && (!currentFloor || f < currentFloor)) return f;
+        }
+
+        // 1. 查找元数据里的回复线索，如 "↳, 回复 #1", "↳ 回复 #2", "回复 #4", "回复 2 楼"
+        const metaCandidates = post.querySelectorAll('.post-meta, .post-header, [component="post/header"], .reply-pin-return-link, .quote-threads-child, [component="post/parent"], .reply-to, .parent-post');
+        for (const el of metaCandidates) {
+            const text = el.textContent || '';
+            const m = text.match(/(?:↳\s*,?\s*回复|回复|↳)\s*#?(\d+)/i) ||
+                      text.match(/(?:回复|对)\s*(?:第\s*)?(\d+)\s*楼/i);
+            if (m) {
+                const f = parseInt(m[1], 10);
+                if (!isNaN(f) && (!currentFloor || f < currentFloor)) return f;
+            }
+        }
+
+        // 2. 检查正文开头的 @username #N 引用、回复 #N 引用或 blockquote
+        const contentEl = post.querySelector('.post-content, .post-text, .nb-editor-post-content');
+        if (contentEl) {
+            const bq = contentEl.querySelector('blockquote');
+            if (bq) {
+                const bqText = bq.textContent || '';
+                const bm = bqText.match(/(?:↳\s*,?\s*回复|回复|↳)\s*#?(\d+)/i) ||
+                           bqText.match(/(?:回复|对)\s*(?:第\s*)?#?(\d+)\s*(?:楼|\b)/i) ||
+                           bqText.match(/#(\d+)\b/);
+                if (bm) {
+                    const f = parseInt(bm[1], 10);
+                    if (!isNaN(f) && (!currentFloor || f < currentFloor)) return f;
+                }
+            }
+            const contentText = (contentEl.innerText || contentEl.textContent || '').trim();
+            // 匹配正文开头的 @username #4（支持带空格英文名如 Dario Altman James、中文名等各类用户名）
+            const atMatch = contentText.slice(0, 120).match(/(?:^|\s)@([^#\n\r\(\)]{1,60}?)\s*(?:[(（]?\s*#(\d+)\s*[)）]?)/) ||
+                            contentText.slice(0, 120).match(/@.+?\s+#(\d+)\b/);
+            if (atMatch) {
+                const f = parseInt(atMatch[2] || atMatch[1], 10);
+                if (!isNaN(f) && (!currentFloor || f < currentFloor)) return f;
+            }
+            // 匹配正文开头的 回复 #4 / 对第4楼
+            const replyMatch = contentText.slice(0, 100).match(/(?:^|\s)(?:↳\s*,?\s*回复|回复|对)\s*(?:第\s*)?#?(\d+)\s*(?:楼|:|\s|\b)/i);
+            if (replyMatch) {
+                const f = parseInt(replyMatch[1], 10);
+                if (!isNaN(f) && (!currentFloor || f < currentFloor)) return f;
+            }
+        }
+
+        // 3. 检查卡片内除正文外的所有包含 ↳ 回复 的小元素
+        const allEls = post.querySelectorAll('a, span, div');
+        for (const el of allEls) {
+            if (el.closest('.post-content, .post-text, .nb-editor-post-content, .lsb-tree-reply-to-pill')) continue;
+            const text = el.textContent || '';
+            if (text.length > 50) continue;
+            const m = text.match(/(?:↳\s*,?\s*回复|回复|↳)\s*#?(\d+)/i);
+            if (m) {
+                const f = parseInt(m[1], 10);
+                if (!isNaN(f) && (!currentFloor || f < currentFloor)) return f;
+            }
+        }
+
+        return null;
+    }
+
+    function extractParentAuthor(post) {
+        if (!post) return null;
+        const contentEl = post.querySelector('.post-content, .post-text, .nb-editor-post-content');
+        if (!contentEl) return null;
+        const text = (contentEl.innerText || contentEl.textContent || '').trim();
+        // 匹配 @用户名 （可带空格，排除标点和#）
+        const m = text.slice(0, 100).match(/(?:^|\s)@([^#\n\r\(\),，:：!！\?？]{2,40})/);
+        if (m) {
+            return m[1].trim();
+        }
+        return null;
+    }
+
+    function extractPostId(post, fallbackIndex) {
+        let pid = post.dataset.postId || post.dataset.pid || post.getAttribute('data-post-id') || post.getAttribute('data-pid');
+        if (!pid && post.id) {
+            const m = post.id.match(/(?:post-|post-container-)(\d+)/);
+            if (m) pid = m[1];
+            else pid = post.id;
+        }
+        if (!pid) pid = 'idx-' + fallbackIndex;
+        return String(pid);
+    }
+
+    function extractParentPid(post) {
+        if (post.dataset.toPid) return String(post.dataset.toPid);
+        if (post.getAttribute('data-to-pid')) return String(post.getAttribute('data-to-pid'));
+        if (post.getAttribute('data-parent-id')) return String(post.getAttribute('data-parent-id'));
+
+        const parentLink = post.querySelector('.reply-pin-return-link, .quote-threads-child a, [component="post/parent"], a[href*="#post-"]');
+        if (parentLink) {
+            const href = parentLink.getAttribute('href') || '';
+            const m = href.match(/#post-(\d+)/) || href.match(/data-topid="(\d+)"/);
+            if (m) return String(m[1]);
+            if (href.includes('#')) {
+                const hash = href.split('#')[1];
+                return String(hash.replace('post-', '').replace('post-container-', ''));
+            }
+        }
+
+        const bq = post.querySelector('blockquote[data-pid], .post-content blockquote a[href*="#post-"]');
+        if (bq) {
+            if (bq.dataset && bq.dataset.pid) return String(bq.dataset.pid);
+            const href = bq.getAttribute('href') || '';
+            const m = href.match(/#post-(\d+)/);
+            if (m) return String(m[1]);
+        }
+
+        return null;
+    }
+
+    function wouldCreateCycle(node, potentialParent) {
+        let curr = potentialParent;
+        while (curr) {
+            if (curr === node) return true;
+            curr = curr.parent;
+        }
+        return false;
+    }
+
+    function applyTreeView(posts, listContainer, firstPost) {
+        if (!listContainer || !posts || posts.length === 0) return;
+
+        // 1. 构建双重映射表 (floorMap 楼层号映射 + postMap PID映射 + authorPostsMap 作者历史发言映射)
+        const postMap = new Map();
+        const floorMap = new Map();
+        const authorPostsMap = new Map();
+        const idList = [];
+
+        posts.forEach((p, idx) => {
+            const pid = extractPostId(p, idx);
+            const floor = extractFloorNumber(p, idx);
+
+            const authorEl = p.querySelector('.avatar-profile-link, a[href*="/user/"], [component="post/author"]');
+            const author = authorEl ? authorEl.textContent.trim() : '';
+
+            const item = {
+                id: pid,
+                floor: floor,
+                el: p,
+                author: author,
+                parent: null,
+                parentAuthor: '',
+                parentFloor: null,
+                children: [],
+                depth: 0,
+                originalIndex: parseInt(p.dataset.lsbOriginalIndex || idx, 10)
+            };
+
+            postMap.set(pid, item);
+            floorMap.set(floor, item);
+            if (author) {
+                if (!authorPostsMap.has(author)) authorPostsMap.set(author, []);
+                authorPostsMap.get(author).push(item);
+            }
+            idList.push(item);
+        });
+
+        // 2. 检测每个楼层的父级关系（优先楼层号匹配，后备 PID 匹配，兜底 @作者名 匹配）
+        const rootItems = [];
+
+        idList.forEach((item, idx) => {
+            if (idx === 0) {
+                // 首楼作为顶层根节点
+                rootItems.push(item);
+                return;
+            }
+
+            const p = item.el;
+            const parentFloor = extractParentFloorNumber(p, item.floor);
+            const parentPid = extractParentPid(p);
+
+            let parentItem = null;
+
+            // 1. 优先按楼层号匹配（直接支持引用 #1, #2, #3, #4 等所有真实上级楼层，包括正文 @User #4）
+            if (parentFloor && floorMap.has(parentFloor)) {
+                const candidate = floorMap.get(parentFloor);
+                if (candidate && candidate !== item && !wouldCreateCycle(item, candidate)) {
+                    parentItem = candidate;
+                }
+            }
+
+            // 2. 次选按 PID 匹配
+            if (!parentItem && parentPid && postMap.has(parentPid)) {
+                const candidate = postMap.get(parentPid);
+                if (candidate && candidate !== item && !wouldCreateCycle(item, candidate)) {
+                    parentItem = candidate;
+                }
+            }
+
+            // 3. 兜底按 @用户名 匹配（当正文中直接 @作者名 但未指定楼层号时，寻找该作者在之前的最近一次回复）
+            if (!parentItem) {
+                const parentAuthor = extractParentAuthor(p);
+                if (parentAuthor && authorPostsMap.has(parentAuthor)) {
+                    const candidatePosts = authorPostsMap.get(parentAuthor);
+                    for (let i = candidatePosts.length - 1; i >= 0; i--) {
+                        const candidate = candidatePosts[i];
+                        if (candidate.originalIndex < item.originalIndex && !wouldCreateCycle(item, candidate)) {
+                            parentItem = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (parentItem && parentItem !== item) {
+                item.parent = parentItem;
+                item.parentAuthor = parentItem.author;
+                item.parentFloor = parentItem.floor;
+                parentItem.children.push(item);
+            } else {
+                rootItems.push(item);
+            }
+        });
+
+        // 3. DFS 深度遍历生成树形排列序列 (同级保持初始顺序)
+        const orderedNodes = [];
+        function traverse(node, depth) {
+            node.depth = Math.min(depth, 5);
+            orderedNodes.push(node);
+            if (node.children && node.children.length > 0) {
+                node.children.sort((a, b) => a.originalIndex - b.originalIndex);
+                node.children.forEach(child => traverse(child, depth + 1));
+            }
+        }
+
+        rootItems.sort((a, b) => a.originalIndex - b.originalIndex);
+        rootItems.forEach(root => traverse(root, 0));
+
+        // 4. 应用 DOM 重排与样式层级
+        listContainer.classList.add('lsb-tree-view-active');
+
+        orderedNodes.forEach(node => {
+            const el = node.el;
+            el.classList.add('lsb-tree-post');
+
+            // 移除旧层级类
+            el.classList.remove('lsb-tree-depth-1', 'lsb-tree-depth-2', 'lsb-tree-depth-3', 'lsb-tree-depth-4', 'lsb-tree-depth-5');
+            el.dataset.lsbTreeDepth = String(node.depth);
+
+            if (node.depth > 0) {
+                el.classList.add(`lsb-tree-depth-${node.depth}`);
+
+                // 如果有被回复者，注入高光线索标签
+                let pill = el.querySelector('.lsb-tree-reply-to-pill');
+                if (!pill && node.parent) {
+                    pill = document.createElement('a');
+                    pill.className = 'lsb-tree-reply-to-pill';
+                    pill.href = `#${node.parent.id}`;
+                    pill.innerHTML = `↳ 回复 @${node.parentAuthor || ('#' + node.parentFloor)}`;
+                    pill.title = `点击平滑滚动至第 #${node.parentFloor} 楼`;
+                    pill.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const targetEl = node.parent.el;
+                        if (targetEl) {
+                            targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            targetEl.style.transition = 'box-shadow 0.3s ease';
+                            targetEl.style.boxShadow = '0 0 0 3px rgba(99, 102, 241, 0.7)';
+                            setTimeout(() => { targetEl.style.boxShadow = ''; }, 1600);
+                        }
+                    });
+
+                    const meta = el.querySelector('.post-meta, .post-header, [component="post/header"]');
+                    if (meta) {
+                        meta.insertAdjacentElement('afterbegin', pill);
+                    }
+                }
+            }
+
+            // 5. 如果当前节点拥有子回复，注入「[-] 收起 N 条回复」折叠按钮
+            let foldBtn = el.querySelector('.lsb-tree-fold-btn');
+            if (node.children && node.children.length > 0) {
+                const descendantCount = countAllDescendants(node);
+                if (!foldBtn) {
+                    foldBtn = document.createElement('button');
+                    foldBtn.type = 'button';
+                    foldBtn.className = 'lsb-tree-fold-btn';
+                    foldBtn.innerHTML = `[-] 收起 ${descendantCount} 条回复`;
+                    foldBtn.title = '折叠/展开本楼所有衍生回复';
+
+                    foldBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const isFolded = foldBtn.classList.toggle('folded');
+                        if (isFolded) {
+                            foldBtn.innerHTML = `[+] 展开 ${descendantCount} 条回复`;
+                            setDescendantsVisibility(node, false);
+                        } else {
+                            foldBtn.innerHTML = `[-] 收起 ${descendantCount} 条回复`;
+                            setDescendantsVisibility(node, true);
+                        }
+                    });
+
+                    const ops = el.querySelector('.post-ops, .post-meta, .post-header');
+                    if (ops) {
+                        ops.appendChild(foldBtn);
+                    }
+                } else {
+                    foldBtn.innerHTML = foldBtn.classList.contains('folded')
+                        ? `[+] 展开 ${descendantCount} 条回复`
+                        : `[-] 收起 ${descendantCount} 条回复`;
+                }
+            } else if (foldBtn) {
+                foldBtn.remove();
+            }
+
+            // 将节点按树形 DFS 顺序排入容器
+            listContainer.appendChild(el);
+        });
+    }
+
+    function initCommentTreeEngine() {
+        const posts = getTopicPosts();
+        if (posts.length <= 1) {
+            const existingBtn = document.getElementById('lsb-tree-view-btn');
+            if (existingBtn) existingBtn.remove();
+            return;
+        }
+
+        const firstPost = posts[0];
+        const listContainer = document.querySelector('.topic-post-list, [component="posts"], ul[component="topic"], .post-list') ||
+                              (firstPost ? firstPost.parentElement : null);
+        if (!listContainer) return;
+
+        // 若用户在设置中关闭了树形展示功能
+        if (!config.enableCommentTree) {
+            const existingBtn = document.getElementById('lsb-tree-view-btn');
+            if (existingBtn) existingBtn.remove();
+            revertToFlatView(posts, listContainer);
+            return;
+        }
+
+        // 保存每栋楼的初始 DOM 顺序
+        posts.forEach((p, idx) => {
+            if (!p.dataset.lsbOriginalIndex) {
+                p.dataset.lsbOriginalIndex = String(idx);
+            }
+        });
+
+        // 注入「🌿 树形展示」切换胶囊按钮
+        let treeBtn = document.getElementById('lsb-tree-view-btn');
+        if (!treeBtn) {
+            treeBtn = document.createElement('button');
+            treeBtn.type = 'button';
+            treeBtn.id = 'lsb-tree-view-btn';
+            treeBtn.className = 'lsb-op-filter-btn';
+            treeBtn.innerHTML = `🌿 树形展示`;
+            treeBtn.title = '按回复与引用关系智能重构为树状层级导轨视图';
+
+            treeBtn.addEventListener('click', () => {
+                const isCurrentlyActive = treeBtn.classList.contains('active');
+                if (isCurrentlyActive) {
+                    treeBtn.classList.remove('active');
+                    treeBtn.innerHTML = `🌿 树形展示`;
+                    localStorage.setItem('lsb_tree_view_active', '0');
+                    revertToFlatView(posts, listContainer);
+                } else {
+                    treeBtn.classList.add('active');
+                    treeBtn.innerHTML = `🌿 树形视图 (已开启)`;
+                    localStorage.setItem('lsb_tree_view_active', '1');
+                    applyTreeView(posts, listContainer, firstPost);
+                }
+            });
+
+            // 挂载位置：优先放在「👑 只看楼主」右侧
+            const opBtn = document.getElementById('lsb-op-filter-btn');
+            if (opBtn && opBtn.parentElement) {
+                opBtn.parentElement.insertBefore(treeBtn, opBtn.nextSibling);
+            } else {
+                const toolbar = document.querySelector('.topic-toolbar, .tab-bar');
+                if (toolbar) {
+                    toolbar.appendChild(treeBtn);
+                } else {
+                    const firstOps = firstPost.querySelector('.post-ops, .post-meta, .post-header');
+                    if (firstOps) firstOps.appendChild(treeBtn);
+                }
+            }
+        }
+
+        // 默认激活：只要用户没有主动显式存入 '0'，且开启了功能，就默认以树形展现！
+        const shouldBeActive = localStorage.getItem('lsb_tree_view_active') !== '0';
+        if (shouldBeActive) {
+            treeBtn.classList.add('active');
+            treeBtn.innerHTML = `🌿 树形视图 (已开启)`;
+            applyTreeView(posts, listContainer, firstPost);
+        } else {
+            treeBtn.classList.remove('active');
+            treeBtn.innerHTML = `🌿 树形展示`;
+            revertToFlatView(posts, listContainer);
+        }
+
+        // 动态加载楼层监听（防止无限滚动新楼层未重构）
+        if (typeof MutationObserver !== 'undefined' && !window.__lsbTreeObserverActive) {
+            window.__lsbTreeObserverActive = true;
+            let treeDebounce = null;
+            const treeObserver = new MutationObserver((mutations) => {
+                const hasExternalPost = mutations.some(m => {
+                    return Array.from(m.addedNodes).some(n => {
+                        return n.nodeType === 1 &&
+                               (n.classList.contains('post-entry') || n.classList.contains('post-item') || (n.matches && n.matches('.topic-post-list > li'))) &&
+                               !n.classList.contains('lsb-tree-post');
+                    });
+                });
+                if (!hasExternalPost) return;
+
+                clearTimeout(treeDebounce);
+                treeDebounce = setTimeout(() => {
+                    if (config.enableCommentTree) {
+                        initCommentTreeEngine();
+                    }
+                }, 300);
+            });
+            const mainPanel = document.querySelector('.main-panel') || document.body;
+            if (mainPanel) {
+                treeObserver.observe(mainPanel, { childList: true, subtree: true });
+            }
+        }
+    }
+    window.__lsbRunCommentTree = initCommentTreeEngine;
 
     // ==========================================
     // 8. 零闪烁防白屏与丝滑生命周期调度 (Zero-FOUC & 120fps Engine)
@@ -5247,8 +6062,8 @@
     function initTopicLinkNewTabEngine() {
         const TOPIC_SELECTOR = 'a[href*="/topic/"], a[href*="/t/"], .topic-title a, .topic-title-link, .post-item a[href*="/topic/"], .daily-hot-topics-card a[href*="/topic/"]';
 
-        // 1. 批量遍历 DOM 为帖子链接设置 target="_blank"
-        function markLinks(root = document) {
+        // 1. 批量同步 DOM 帖子链接 target="_blank"
+        function syncLinks(root = document) {
             if (!root || !root.querySelectorAll) return;
             const links = root.querySelectorAll(TOPIC_SELECTOR);
             links.forEach(a => {
@@ -5256,76 +6071,92 @@
                 if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
                 // 排除帖子内楼层定位、操作按钮、分页器
                 if (a.closest('.post-ops, .post-tools, .dropdown-menu, .post-action, .pagination, .topic-pages, .reply-pin-return-link')) return;
-                a.target = '_blank';
-                a.rel = 'noopener noreferrer';
+
+                if (config.enableTopicNewTab) {
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                } else if (a.target === '_blank') {
+                    a.removeAttribute('target');
+                    a.removeAttribute('rel');
+                }
             });
         }
 
-        markLinks(document);
+        syncLinks(document);
 
         // 2. 观察动态插入的内容（瀑布流/无限滚动/切页）
-        const observer = new MutationObserver((mutations) => {
-            for (const mutation of mutations) {
-                for (const node of mutation.addedNodes) {
-                    if (node.nodeType === 1) {
-                        markLinks(node);
+        if (!window.__lsbNewTabObserverActive) {
+            window.__lsbNewTabObserverActive = true;
+            const observer = new MutationObserver((mutations) => {
+                for (const mutation of mutations) {
+                    for (const node of mutation.addedNodes) {
+                        if (node.nodeType === 1) {
+                            syncLinks(node);
+                        }
                     }
                 }
-            }
-        });
-        observer.observe(document.body || document.documentElement, {
-            childList: true,
-            subtree: true
-        });
+            });
+            observer.observe(document.body || document.documentElement, {
+                childList: true,
+                subtree: true
+            });
+        }
 
-        // 3. 全局捕获阶段拦截：确保无论是否被 SPA 客户端路由接管，点击帖子均在新窗口加载
-        document.addEventListener('click', (e) => {
-            // 仅拦截鼠标左键单击且未按辅助键（Ctrl/Cmd/Shift 浏览器原生已有新开标签逻辑）
-            if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+        // 3. 全局捕获阶段拦截：若功能开启，确保无论是否被 SPA 客户端路由接管，点击帖子均在新窗口加载
+        if (!window.__lsbNewTabClickActive) {
+            window.__lsbNewTabClickActive = true;
+            document.addEventListener('click', (e) => {
+                // 若用户关闭了“新标签页打开”开关，直接放行，按站点原本逻辑处理
+                if (!config.enableTopicNewTab) return;
 
-            const target = e.target;
-            if (!target) return;
+                // 仅拦截鼠标左键单击且未按辅助键（Ctrl/Cmd/Shift 浏览器原生已有新开标签逻辑）
+                if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
 
-            // 排除操作按钮、分页器、下拉菜单、楼层引用定位
-            if (target.closest('.post-ops, .post-tools, .dropdown-menu, .post-action, .pagination, .topic-pages, .reply-pin-return-link')) {
-                return;
-            }
+                const target = e.target;
+                if (!target) return;
 
-            // 匹配链接或帖子标题容器
-            const link = target.closest('a[href*="/topic/"], a[href*="/t/"], .topic-title a, .topic-title');
-            if (!link) return;
-
-            let href = link.getAttribute('href');
-            if (!href && link.tagName !== 'A') {
-                const innerA = link.querySelector('a[href]');
-                if (innerA) href = innerA.getAttribute('href');
-            }
-
-            if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
-
-            try {
-                const url = new URL(href, window.location.origin);
-                // 严格限定为帖子链接：pathname 必须包含 /topic/ 或 /t/
-                if (!url.pathname.includes('/topic/') && !url.pathname.includes('/t/')) return;
-
-                // 若当前已经在该帖子详情页，且点击的是同帖子的楼层定位 (#post-xxx)，不新开窗口
-                if (url.pathname === window.location.pathname && url.hash) return;
-
-                // 标记 target="_blank"
-                if (link.tagName === 'A') {
-                    link.target = '_blank';
-                    link.rel = 'noopener noreferrer';
+                // 排除操作按钮、分页器、下拉菜单、楼层引用定位
+                if (target.closest('.post-ops, .post-tools, .dropdown-menu, .post-action, .pagination, .topic-pages, .reply-pin-return-link')) {
+                    return;
                 }
 
-                // 阻止任何 SPA 客户端路由在当前页跳转，强制新标签页加载
-                e.stopPropagation();
-                e.preventDefault();
-                window.open(url.href, '_blank', 'noopener,noreferrer');
-            } catch (err) {
-                // 异常时回退
-            }
-        }, true);
+                // 匹配链接或帖子标题容器
+                const link = target.closest('a[href*="/topic/"], a[href*="/t/"], .topic-title a, .topic-title');
+                if (!link) return;
+
+                let href = link.getAttribute('href');
+                if (!href && link.tagName !== 'A') {
+                    const innerA = link.querySelector('a[href]');
+                    if (innerA) href = innerA.getAttribute('href');
+                }
+
+                if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+
+                try {
+                    const url = new URL(href, window.location.origin);
+                    // 严格限定为帖子链接：pathname 必须包含 /topic/ 或 /t/
+                    if (!url.pathname.includes('/topic/') && !url.pathname.includes('/t/')) return;
+
+                    // 若当前已经在该帖子详情页，且点击的是同帖子的楼层定位 (#post-xxx)，不新开窗口
+                    if (url.pathname === window.location.pathname && url.hash) return;
+
+                    // 标记 target="_blank"
+                    if (link.tagName === 'A') {
+                        link.target = '_blank';
+                        link.rel = 'noopener noreferrer';
+                    }
+
+                    // 阻止任何 SPA 客户端路由在当前页跳转，强制新标签页加载
+                    e.stopPropagation();
+                    e.preventDefault();
+                    window.open(url.href, '_blank', 'noopener,noreferrer');
+                } catch (err) {
+                    // 异常时回退
+                }
+            }, true);
+        }
     }
+    window.__lsbRunTopicNewTab = initTopicLinkNewTabEngine;
 
     // 6. 过渡锁解除：双重 rAF 等待首帧渲染完成，杜绝变形闪烁
     function releaseTransitionLock() {
@@ -5358,6 +6189,7 @@
         initSettingsWidget();
         initHoverPreviewEngine();
         initOpHighlightEngine();
+        initCommentTreeEngine();
         initTopicLinkNewTabEngine();
         releaseTransitionLock();
     }
@@ -5374,6 +6206,7 @@
         initBackdrop();
         applyInlineVariables(document.documentElement, config);
         initOpHighlightEngine();
+        initCommentTreeEngine();
         initTopicLinkNewTabEngine();
         releaseTransitionLock();
     }
