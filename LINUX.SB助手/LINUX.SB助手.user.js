@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX.SB助手（二开版）
 // @namespace    https://linux.sb/
-// @version      1.1.9
-// @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 打赏暴击今日统计（中奖率估算·每日 10 次与 1000 分上限·玩家列表·最近打赏结果逐笔配对实测倍率·收支），并在帖子列表/主题页把今日已打赏的作者名标成【已打赏】，TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
+// @version      1.1.10
+// @description  积分分析（今天/昨天/近七天/所有筛选，切换带抓取进度条）+ 称号合成统计（仅统计熔炼/合成通知，回收·售出·打赏等自动过滤并计数；消耗稀有度汇总·熔炼所得按名称+级别明细）+ 称号监控（交易市场按价格阈值提醒，10 秒轮询可启停）+ 打赏暴击今日统计（日常模式中奖率 3%-5%·每日 10 次与 1000 分上限·30 字以上非水贴可触发·玩家列表·最近打赏结果逐笔配对实测倍率·收支），并在帖子列表/主题页把今日已打赏的作者名标成【已打赏】，TAB 切换，面板停靠右上角且高度不超过视口一半；未监测到用户时三指标显 "-" 且底部提示
 // @author       干货助手
 // @license      MIT
 // @match        https://linux.sb/*
@@ -22,8 +22,10 @@
         maxPages: 40,        // 翻页安全上限
         maxTimeline: 200,    // 时间线最多显示的条数
         maxNames: 30,        // 合成所得里最多展示多少种称号
-        luckyCap: 10,        // 每日暴击抽奖次数上限（达到 10 次不再触发）
+        luckyCap: 10,        // 每日参与抽奖的打赏次数上限（打赏满 10 次不再触发，不是指命中 10 次暴击）
         highThreshold: 1000, // 当日暴击累计积分达到该值后概率归 0（规则原文「超过 1000」）
+        probMin: 3,          // 日常模式中奖概率区间下限（25460，2026-10-08 起）
+        probMax: 5,          // 日常模式中奖概率区间上限；16882 里那句「初始约 36%」是测试期口径，已作废
         recentTips: 10,      // 打赏面板「最近打赏结果」最多列几条
         critOnline: true,    // 站点是否在线打赏暴击。置 false 时打赏面板盖一层灰色浮层提示已下架（站点再次下架时改这里即可）；
                              // 站点下线过一次（1.1.8），现已恢复，故为 true
@@ -32,7 +34,8 @@
         poolUrl: 'https://linux.sb/gacha',              // 全部称号列表（解析称号种类）
         monitorMs: 10 * 1000, // 称号监控轮询间隔（10 秒）
     };
-    var RULE_URL = 'https://linux.sb/topic/16882'; // 打赏暴击（幸运奖励）规则公示帖
+    var RULE_URL = 'https://linux.sb/topic/16882'; // 打赏暴击（幸运奖励）规则公示帖：倍率 2-20、称号加成、每日 10 次 / 累计 1000 分上限、同一人只触发一次
+    var MODE_URL = 'https://linux.sb/topic/25460'; // 日常模式公告（2026-10-08）：中奖概率改为 3%-5%，30 字以上非水贴主题可触发，倍率规则不变
     var STORE_KEY = 'linuxsb-combo-v311';
     var MARKET_KEY = 'linuxsb-market-v309';   // 称号监控配置 + 状态（localStorage 持久化）
     var TAB_KEY = 'linuxsb-combo-tab-v309';   // 记住当前激活的 TAB（刷新后保持，不切回默认）
@@ -1312,7 +1315,7 @@
             '  <button type="button" class="combo-tab" data-tab="points" title="积分分析">📊 积分</button>' +
             '  <button type="button" class="combo-tab" data-tab="syn" title="称号合成统计">🧬 合成</button>' +
             '  <button type="button" class="combo-tab" data-tab="market" title="称号监控">📡 称号<span class="combo-tab-badge" data-tab-badge hidden></span></button>' +
-            '  <button type="button" class="combo-tab" data-tab="lucky" title="打赏暴击（幸运奖励）">🎁 打赏</button>' +
+            '  <button type="button" class="combo-tab" data-tab="lucky" title="打赏暴击（幸运奖励）· 日常模式，中奖概率 3%-5%">🎁 打赏</button>' +
             '</div>' +
             '<div class="combo-body">' +
             '  <div class="market-toast" data-market-toast></div>' +
@@ -1366,7 +1369,7 @@
             '    </div>') +
             '    <div class="combo-progress" data-ldm-progress hidden><span class="combo-progress-track"><span class="combo-progress-bar"></span></span><span class="combo-progress-text"></span></div>' +
             '    <div class="ldm-prob" data-ldm-prob>' +
-            '      <span class="ldm-prob-label">下次打赏中奖率</span>' +
+            '      <span class="ldm-prob-label">下次打赏中奖率<a class="ldm-prob-src" href="' + MODE_URL + '" target="_blank" rel="noopener" title="日常模式公告（2026-10-08）：中奖概率 3%-5%，打赏 30 字以上的非水贴主题可触发，基础倍率与加成规则不变">· 日常模式</a></span>' +
             '      <b class="ldm-prob-num">–</b>' +
             '      <span class="ldm-prob-note">–</span>' +
             '    </div>' +
@@ -1784,7 +1787,7 @@
             recentBox.hidden = true;
         } else if (stats) {
             var p = estimateProb(stats);
-            probNum.textContent = (p.prob > 0 ? '约 ' : '') + p.prob + '%';
+            probNum.textContent = p.probText;
             probNote.textContent = p.note;
             probEl.className = 'ldm-prob ldm-prob-' + p.tier;
 
@@ -1857,7 +1860,6 @@
             }
 
             tipsEl.classList.toggle('ldm-hot', stats.tips >= CONFIG.luckyCap);
-            luckyEl.classList.toggle('ldm-hot', stats.lucky >= CONFIG.luckyCap);
         }
         widget.querySelector('[data-ldm-time]').textContent = timeText || '';
     }
@@ -2484,17 +2486,19 @@
     }
 
     function estimateProb(stats) {
-        // 规则 16882：每日参与 10 次或当日暴击累计 1000 分后不再触发；同一个人只触发一次
+        // 每日参与（打赏）满 10 次、或当日暴击累计 1000 分后不再触发；同一个人只触发一次（以上见 16882）
+        // 2026-10-08 起进入日常模式：概率 3%-5%、30 字以上非水贴主题才可触发（见 25460），两条上限不变
+        // 「10 次」数的是打赏次数，不是命中暴击的次数——日常模式 3%-5% 下暴击根本攒不到 10 次
         // 规则原文写「倍率 2-20」，实测有 55 倍，故不展示规则倍率，改在逐笔结果里显示实测倍率
-        if (stats.lucky >= CONFIG.luckyCap) {
-            return { prob: 0, tier: 'over', note: '已达每日 ' + CONFIG.luckyCap + ' 次上限（' + stats.lucky + '/' + CONFIG.luckyCap + '）' };
+        if (stats.tips >= CONFIG.luckyCap) {
+            return { probText: '0%', tier: 'over', note: '今日打赏已满 ' + CONFIG.luckyCap + ' 次（' + stats.tips + '/' + CONFIG.luckyCap + '），不再触发' };
         }
         if (stats.luckyGained >= CONFIG.highThreshold) {
-            return { prob: 0, tier: 'over', note: '今日暴击积分累计 ' + stats.luckyGained + ' ≥ ' + CONFIG.highThreshold + '，概率归 0' };
+            return { probText: '0%', tier: 'over', note: '今日暴击积分累计 ' + stats.luckyGained + ' ≥ ' + CONFIG.highThreshold + '，概率归 0' };
         }
         return {
-            prob: 36, tier: 'low',
-            note: '初始档 · 暴击累计 ' + stats.luckyGained + '/' + CONFIG.highThreshold + ' 分 · 今日打赏 ' + stats.tips + '/' + CONFIG.luckyCap + ' 次',
+            probText: CONFIG.probMin + '%~' + CONFIG.probMax + '%', tier: 'low',
+            note: '日常模式 · 暴击累计 ' + stats.luckyGained + '/' + CONFIG.highThreshold + ' 分 · 今日打赏 ' + stats.tips + '/' + CONFIG.luckyCap + ' 次',
         };
     }
 
@@ -2665,6 +2669,9 @@
         '#linuxsb-combo .ldm-offline-note{color:#92400e;font-size:11px;line-height:1.55}',
         '#linuxsb-combo .ldm-prob{display:flex;flex-direction:column;gap:1px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--line,#e5e7eb);border-radius:8px;background:var(--brand-soft,rgba(37,99,235,.06))}',
         '#linuxsb-combo .ldm-prob-label{color:var(--text-muted,#6b7280);font-size:11px}',
+        /* 「· 日常模式」是概率口径出处（25460）的链接：站点把 --brand 定义成近黑石墨色，用它就不像链接，故写死蓝色 */
+        '#linuxsb-combo .ldm-prob-src{margin-left:4px;color:#3b82f6;font-weight:600;text-decoration:none;cursor:pointer}',
+        '#linuxsb-combo .ldm-prob-src:hover{text-decoration:underline}',
         '#linuxsb-combo .ldm-prob-num{font-size:26px;font-weight:800;color:var(--brand,#2563eb);letter-spacing:.5px}',
         '#linuxsb-combo .ldm-prob-note{color:var(--text-subtle,#9ca3af);font-size:11px}',
         '#linuxsb-combo .ldm-prob.ldm-prob-over .ldm-prob-num{color:var(--danger,#dc2626)}',
